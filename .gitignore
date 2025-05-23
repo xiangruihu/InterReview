@@ -1,0 +1,25 @@
+# .gitignore
+__pycache__/
+.env
+*.pyc
+*.log
+.DS_Store
+venv/
+.venv
+.mp3
+# /data
+# 面试复盘报告_20250523_212255_test.md
+# 面试复盘报告_20250523_212255.md
+# 5月20日商汤文本大模型一面.MP3
+# 5月20日商汤文本大模型一面.txt
+# 忽略 output 文件夹下所有文件
+output/*
+
+# 但不忽略 output/readme.md
+!output/readme.md
+
+# 忽略 data 文件夹下所有文件
+data/*
+
+# 但不忽略 data/readme.md
+!data/readme.md

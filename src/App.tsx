@@ -12,7 +12,7 @@ import { AnalyzingLoader } from './components/AnalyzingLoader';
 import { EmptyState } from './components/EmptyState';
 import { MessageList } from './components/MessageList';
 import { TypingIndicator } from './components/TypingIndicator';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
 import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
@@ -55,7 +55,7 @@ interface Message {
 
 export default function App() {
   // Default demo interviews
-  const getDefaultInterviews = (): InterviewData[] => {
+  const getDefaultInterviews = useCallback((): InterviewData[] => {
     return [
       {
         id: '1',
@@ -90,7 +90,7 @@ export default function App() {
         date: '2025-12-01T16:00',
       },
     ];
-  };
+  }, []);
 
   // Login state - Load from localStorage
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
@@ -116,6 +116,7 @@ export default function App() {
   
   // Chat messages state - separate messages for each interview
   const [interviewMessages, setInterviewMessages] = useState<Record<string, Message[]>>({});
+  const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
   const [isAITyping, setIsAITyping] = useState(false);
   
   // Interview data state - Load from localStorage
@@ -148,66 +149,102 @@ export default function App() {
 
   // 同步到后端：面试列表
   useEffect(() => {
-    if (!currentUserProfile) return;
+    if (!currentUserProfile || !hasLoadedRemoteData) return;
     (async () => {
       try { await saveInterviews(currentUserProfile.userId, interviews as any); } catch (e) {
         console.warn('[backend] saveInterviews 失败：', e);
       }
     })();
-  }, [interviews, currentUserProfile?.userId]);
+  }, [interviews, currentUserProfile?.userId, hasLoadedRemoteData]);
 
   // 同步到后端：对话消息
   useEffect(() => {
-    if (!currentUserProfile) return;
+    if (!currentUserProfile || !hasLoadedRemoteData) return;
     (async () => {
       try { await saveMessages(currentUserProfile.userId, interviewMessages as any); } catch (e) {
         console.warn('[backend] saveMessages 失败：', e);
       }
     })();
-  }, [interviewMessages, currentUserProfile?.userId]);
+  }, [interviewMessages, currentUserProfile?.userId, hasLoadedRemoteData]);
 
-  // 登录后或页面刷新后：加载当前用户的历史数据（含旧键迁移）
-  useEffect(() => {
-    if (!isLoggedIn || !currentUserProfile) return;
-    const uid = currentUserProfile.userId;
-    const uname = currentUserProfile.username;
-
-    // 面试列表：优先读取 uid 命名空间；若不存在尝试旧用户名命名空间并迁移
-    let savedInterviews = localStorage.getItem(`interreview_interviews_${uid}`);
-    if (!savedInterviews) {
-      const legacy = localStorage.getItem(`interreview_interviews_${uname}`);
-      if (legacy) {
-        savedInterviews = legacy;
-        localStorage.setItem(`interreview_interviews_${uid}`, legacy);
-      }
-    }
-    if (savedInterviews) {
-      try { setInterviews(JSON.parse(savedInterviews)); } catch {}
-    } else {
-      setInterviews(getDefaultInterviews());
-    }
-
-    // 对话消息：同样做迁移
-    let savedMessages = localStorage.getItem(`interreview_messages_${uid}`);
-    if (!savedMessages) {
-      const legacy = localStorage.getItem(`interreview_messages_${uname}`);
-      if (legacy) {
-        savedMessages = legacy;
-        localStorage.setItem(`interreview_messages_${uid}`, legacy);
-      }
-    }
-    if (savedMessages) {
-      try { setInterviewMessages(JSON.parse(savedMessages)); } catch {}
-    } else {
-      setInterviewMessages({});
-    }
-
-    // 恢复最近选中的会话
-    const savedSelected = localStorage.getItem(`interreview_selectedInterview_${uid}`);
+  const restoreSelectedInterview = useCallback((userId: string) => {
+    const savedSelected = localStorage.getItem(`interreview_selectedInterview_${userId}`);
     if (savedSelected) {
       setSelectedInterviewId(savedSelected);
     }
-  }, [isLoggedIn, currentUserProfile?.userId]);
+  }, []);
+
+  const loadLocalBackup = useCallback((userId: string, username: string) => {
+    let savedInterviews = localStorage.getItem(`interreview_interviews_${userId}`);
+    if (!savedInterviews) {
+      const legacy = localStorage.getItem(`interreview_interviews_${username}`);
+      if (legacy) {
+        savedInterviews = legacy;
+        localStorage.setItem(`interreview_interviews_${userId}`, legacy);
+      }
+    }
+
+    let interviewsPayload: InterviewData[] = getDefaultInterviews();
+    if (savedInterviews) {
+      try {
+        interviewsPayload = JSON.parse(savedInterviews);
+      } catch {
+        interviewsPayload = getDefaultInterviews();
+      }
+    }
+
+    let savedMessages = localStorage.getItem(`interreview_messages_${userId}`);
+    if (!savedMessages) {
+      const legacy = localStorage.getItem(`interreview_messages_${username}`);
+      if (legacy) {
+        savedMessages = legacy;
+        localStorage.setItem(`interreview_messages_${userId}`, legacy);
+      }
+    }
+
+    let messagesPayload: Record<string, Message[]> = {};
+    if (savedMessages) {
+      try {
+        messagesPayload = JSON.parse(savedMessages);
+      } catch {
+        messagesPayload = {};
+      }
+    }
+
+    setInterviews(interviewsPayload);
+    setInterviewMessages(messagesPayload);
+    restoreSelectedInterview(userId);
+  }, [getDefaultInterviews, restoreSelectedInterview]);
+
+  const hydrateFromBackend = useCallback(async (profile: UserProfile) => {
+    setHasLoadedRemoteData(false);
+    try {
+      await registerUser({ ...profile });
+      const [remoteInterviews, remoteMessages] = await Promise.all([
+        fetchInterviews(profile.userId),
+        fetchMessages(profile.userId),
+      ]);
+
+      const finalInterviews = (remoteInterviews && remoteInterviews.length > 0)
+        ? remoteInterviews
+        : getDefaultInterviews();
+      const finalMessages = remoteMessages || {};
+
+      setInterviews(finalInterviews as any);
+      setInterviewMessages(finalMessages as any);
+      restoreSelectedInterview(profile.userId);
+    } catch (e) {
+      console.warn('[backend] 无法连接后端，使用本地数据：', e);
+      loadLocalBackup(profile.userId, profile.username);
+    } finally {
+      setHasLoadedRemoteData(true);
+    }
+  }, [getDefaultInterviews, loadLocalBackup, restoreSelectedInterview]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserProfile) return;
+    hydrateFromBackend(currentUserProfile);
+  }, [isLoggedIn, currentUserProfile?.userId, hydrateFromBackend]);
 
   // Update interview data
   const updateInterview = (id: string, data: Partial<InterviewData>) => {
@@ -368,65 +405,16 @@ export default function App() {
 
     setCurrentUserProfile(profile);
     setIsLoggedIn(true);
+    setHasLoadedRemoteData(false);
     localStorage.setItem('interreview_isLoggedIn', 'true');
     localStorage.setItem('interreview_currentUserProfile', JSON.stringify(profile));
-
-    // 先请求后端：创建用户目录并尝试读取服务器端数据
-    try {
-      await registerUser({ ...profile });
-      const [remoteInterviews, remoteMessages] = await Promise.all([
-        fetchInterviews(userId),
-        fetchMessages(userId),
-      ]);
-      if (remoteInterviews && remoteInterviews.length > 0) {
-        setInterviews(remoteInterviews as any);
-      } else {
-        setInterviews(getDefaultInterviews());
-      }
-      if (remoteMessages) {
-        setInterviewMessages(remoteMessages as any);
-      } else {
-        setInterviewMessages({});
-      }
-    } catch (e) {
-      console.warn('[backend] 无法连接后端，使用本地数据：', e);
-      // 加载该用户的面试列表与消息（本地回退）
-      // 优先读取用户ID命名空间；若不存在，兼容读取旧的基于用户名的命名空间
-      let savedInterviews = localStorage.getItem(`interreview_interviews_${userId}`);
-      if (!savedInterviews) {
-        const legacyInterviews = localStorage.getItem(`interreview_interviews_${profileInput.username}`);
-        if (legacyInterviews) {
-          savedInterviews = legacyInterviews;
-          // 迁移一份到新命名空间
-          localStorage.setItem(`interreview_interviews_${userId}`, legacyInterviews);
-        }
-      }
-      if (savedInterviews) {
-        try { setInterviews(JSON.parse(savedInterviews)); } catch {}
-      } else {
-        setInterviews(getDefaultInterviews());
-      }
-
-      let savedMessages = localStorage.getItem(`interreview_messages_${userId}`);
-      if (!savedMessages) {
-        const legacyMessages = localStorage.getItem(`interreview_messages_${profileInput.username}`);
-        if (legacyMessages) {
-          savedMessages = legacyMessages;
-          localStorage.setItem(`interreview_messages_${userId}`, legacyMessages);
-        }
-      }
-      if (savedMessages) {
-        try { setInterviewMessages(JSON.parse(savedMessages)); } catch {}
-      } else {
-        setInterviewMessages({});
-      }
-    }
   };
 
   // Handle logout
   const handleLogout = () => {
     setIsLoggedIn(false);
     setCurrentUserProfile(null);
+    setHasLoadedRemoteData(false);
     localStorage.removeItem('interreview_isLoggedIn');
     localStorage.removeItem('interreview_currentUserProfile');
     // 内存中保留当前的 interviews/messages，不清空本地存储，便于下次登录继续

@@ -174,3 +174,37 @@ class StorageService:
         except Exception as e:
             print(f"读取分析数据失败: {e}")
             return None if interview_id else {}
+
+    def get_transcripts(self, user_id: str) -> Dict[str, Any]:
+        """获取所有转录结果"""
+        try:
+            file_path = self._get_user_file(user_id, "transcripts.json")
+            if not file_path.exists():
+                return {}
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"读取转录数据失败: {e}")
+            return {}
+
+    def get_transcript(self, user_id: str, interview_id: str) -> Optional[Dict[str, Any]]:
+        """获取单个面试的转录"""
+        transcripts = self.get_transcripts(user_id)
+        return transcripts.get(interview_id)
+
+    def save_transcripts(self, user_id: str, transcripts: Dict[str, Any]) -> bool:
+        """保存全部转录"""
+        try:
+            file_path = self._get_user_file(user_id, "transcripts.json")
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(transcripts, f, ensure_ascii=False, indent=2, default=str)
+            return True
+        except Exception as e:
+            print(f"保存转录数据失败: {e}")
+            return False
+
+    def save_transcript(self, user_id: str, interview_id: str, transcript: Dict[str, Any]) -> bool:
+        """保存单个面试的转录"""
+        transcripts = self.get_transcripts(user_id)
+        transcripts[interview_id] = transcript
+        return self.save_transcripts(user_id, transcripts)

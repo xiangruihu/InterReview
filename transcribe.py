@@ -25,7 +25,7 @@ data = {
 }
 
 # 5. 指定你的音频文件路径 (请替换成你的真实文件路径)
-audio_file_path = '/Users/xiangrui/code/InterReview/data/uploads/1.mp3'  # <--- 修改这里
+audio_file_path = '/Users/xiangrui/code/InterReview/data/uploads/2.mp3'  # <--- 修改这里
 
 # 检查文件是否存在
 if not os.path.exists(audio_file_path):

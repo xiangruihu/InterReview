@@ -1,17 +1,49 @@
-import { CloudUpload, FileAudio, Loader2, X, CheckCircle2, AlertCircle, File, Sparkles } from 'lucide-react';
-import { useState, useRef } from 'react';
+import {
+  CloudUpload,
+  FileAudio,
+  Loader2,
+  CheckCircle2,
+  File,
+  Sparkles,
+  FileText,
+  RefreshCw,
+} from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner@2.0.3';
+import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../utils/backend';
 
 interface UploadAreaProps {
-  onUploadComplete?: (file: File) => void;
+  userId?: string;
+  interviewId?: string;
+  interviewTitle?: string;
+  interviewStatus?: string;
+  interviewFileUrl?: string;
+  initialTranscript?: string;
+  onUploadComplete?: (info: { fileName: string; filePath: string; fileType?: string }) => void;
   onStartAnalysis?: () => void;
+  onTranscriptUpdate?: (text: string) => void;
 }
 
-export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProps) {
+export function UploadArea({
+  userId,
+  interviewId,
+  interviewTitle,
+  interviewStatus,
+  interviewFileUrl,
+  initialTranscript,
+  onUploadComplete,
+  onStartAnalysis,
+  onTranscriptUpdate,
+}: UploadAreaProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
+  const [transcript, setTranscript] = useState(initialTranscript || '');
+  const [transcriptUpdatedAt, setTranscriptUpdatedAt] = useState<string | null>(null);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Supported file types
@@ -48,28 +80,36 @@ export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProp
   };
 
   // Handle file selection
-  const handleFileSelect = (file: File) => {
+  const handleFileSelect = async (file: File) => {
     if (!validateFile(file)) {
       return;
     }
 
-    // Simulate upload progress
-    setIsUploading(true);
-    setUploadProgress(0);
+    if (!userId || !interviewId) {
+      toast.error('请先登录并选择要上传的面试');
+      return;
+    }
 
-    const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsUploading(false);
-          setUploadedFile(file);
-          toast.success(`「${file.name}」上传成功`);
-          onUploadComplete?.(file);
-          return 100;
-        }
-        return prev + 10;
+    try {
+      setIsUploading(true);
+      setUploadProgress(10);
+      const result = await uploadInterviewFile(userId, interviewId, file);
+      setUploadProgress(100);
+      setUploadedFile(file);
+      toast.success(`「${file.name}」上传成功`);
+      onUploadComplete?.({
+        fileName: file.name,
+        filePath: result.file_path,
+        fileType: result.file_type || file.type,
       });
-    }, 200);
+      await runTranscription();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '上传失败，请稍后重试';
+      toast.error('上传失败', { description: message });
+      setUploadProgress(0);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   // Handle drag events
@@ -106,19 +146,9 @@ export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProp
     fileInputRef.current?.click();
   };
 
-  // Remove uploaded file
-  const handleRemoveFile = () => {
-    setUploadedFile(null);
-    setUploadProgress(0);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-    toast.info('已移除文件');
-  };
-
   // Start analysis
   const handleStartAnalysis = () => {
-    if (!uploadedFile) {
+    if (!uploadedFile && !interviewFileUrl) {
       toast.error('请先上传文件');
       return;
     }
@@ -140,6 +170,87 @@ export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProp
     }
     return FileAudio;
   };
+
+  const runTranscription = async () => {
+    if (!userId || !interviewId) {
+      toast.error('请先选择面试');
+      return;
+    }
+
+    if (!uploadedFile && !interviewFileUrl) {
+      toast.error('请先上传文件');
+      return;
+    }
+
+    try {
+      setIsTranscribing(true);
+      setTranscriptionError(null);
+      const transcriptData = await transcribeInterview(userId, interviewId);
+      const text = transcriptData?.text || '';
+      setTranscript(text);
+      setTranscriptUpdatedAt(transcriptData?.createdAt || new Date().toISOString());
+      onTranscriptUpdate?.(text);
+      toast.success('转写完成');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '转录失败';
+      setTranscriptionError(message);
+      toast.error('转写失败', { description: message });
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!userId || !interviewId) {
+      setTranscript('');
+      setTranscriptUpdatedAt(null);
+      return;
+    }
+
+    let cancelled = false;
+    setTranscriptionError(null);
+    setIsLoadingTranscript(true);
+    fetchTranscript(userId, interviewId)
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.text) {
+          setTranscript(data.text);
+          setTranscriptUpdatedAt(data.createdAt || null);
+          onTranscriptUpdate?.(data.text);
+        } else if (initialTranscript) {
+          setTranscript(initialTranscript);
+          onTranscriptUpdate?.(initialTranscript);
+        } else {
+          setTranscript('');
+          setTranscriptUpdatedAt(null);
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : '获取转录失败';
+        setTranscriptionError(message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingTranscript(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, interviewId, initialTranscript, onTranscriptUpdate]);
+
+  const existingFileName =
+    uploadedFile?.name ||
+    (interviewFileUrl ? interviewFileUrl.split('/').pop() || '已上传的文件' : null);
+
+  const hasUploaded = Boolean(uploadedFile || interviewFileUrl);
+
+  useEffect(() => {
+    setUploadedFile(null);
+    setUploadProgress(0);
+  }, [userId, interviewId]);
 
   return (
     <div className="space-y-6">
@@ -165,7 +276,7 @@ export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProp
           className="hidden"
         />
 
-        {!uploadedFile ? (
+        {!hasUploaded ? (
           <div className="text-center space-y-4">
             {/* Title */}
             <h3 className="text-gray-900">上传面试录音 / 视频 / 文本</h3>
@@ -236,7 +347,8 @@ export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProp
               <h3 className="text-gray-900 mb-2">文件上传成功</h3>
               <div className="inline-flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-lg">
                 {(() => {
-                  const FileIcon = getFileIcon(uploadedFile.name);
+                  const displayName = existingFileName || '已上传的文件';
+                  const FileIcon = getFileIcon(displayName);
                   return (
                     <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
                       <FileIcon className="w-5 h-5 text-blue-600" />
@@ -244,24 +356,27 @@ export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProp
                   );
                 })()}
                 <div className="text-left">
-                  <div className="text-sm text-gray-900">{uploadedFile.name}</div>
-                  <div className="text-xs text-gray-500">
-                    {formatFileSize(uploadedFile.size)}
+                  <div className="text-sm text-gray-900">
+                    {existingFileName || '已上传的文件'}
                   </div>
+                  {uploadedFile && (
+                    <div className="text-xs text-gray-500">
+                      {formatFileSize(uploadedFile.size)}
+                    </div>
+                  )}
+                  {!uploadedFile && interviewFileUrl && (
+                    <div className="text-xs text-gray-500">
+                      来自服务器的已上传文件
+                    </div>
+                  )}
                 </div>
-                <button
-                  onClick={handleRemoveFile}
-                  className="ml-2 text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
               </div>
             </div>
 
             {/* Action Buttons */}
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
-                onClick={handleRemoveFile}
+                onClick={handleUploadClick}
                 className="px-5 py-2.5 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg transition-colors"
               >
                 重新上传
@@ -293,6 +408,62 @@ export function UploadArea({ onUploadComplete, onStartAnalysis }: UploadAreaProp
             </ul>
           </div>
         </div>
+      </div>
+
+      {/* Transcript Section */}
+      <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-gray-900 font-medium">
+              <FileText className="w-5 h-5 text-blue-600" />
+              <span>转写结果</span>
+            </div>
+            {transcriptUpdatedAt && (
+              <p className="text-xs text-gray-500 mt-1">
+                最近更新：{new Date(transcriptUpdatedAt).toLocaleString()}
+              </p>
+            )}
+            {!transcriptUpdatedAt && (
+              <p className="text-xs text-gray-500 mt-1">
+                上传后会自动调用 AI 生成文字稿
+              </p>
+            )}
+          </div>
+          <button
+            onClick={runTranscription}
+            disabled={isTranscribing || !userId || !interviewId || !hasUploaded}
+            className={`px-4 py-2 rounded-lg flex items-center gap-2 border transition-colors ${
+              isTranscribing || !userId || !interviewId || !hasUploaded
+                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            {isTranscribing ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4" />
+            )}
+            {isTranscribing ? '转写中...' : '重新转写'}
+          </button>
+        </div>
+
+        <div className="min-h-[140px] border border-dashed border-gray-200 rounded-xl bg-gray-50 p-4 overflow-y-auto">
+          {isLoadingTranscript || isTranscribing ? (
+            <div className="flex items-center gap-2 text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>AI 正在生成文字稿...</span>
+            </div>
+          ) : transcript ? (
+            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{transcript}</p>
+          ) : (
+            <p className="text-sm text-gray-500">
+              暂无转写内容。上传文件后，系统会自动将音频/视频转成文本供你查看。
+            </p>
+          )}
+        </div>
+        {transcriptionError && (
+          <p className="text-sm text-red-600">转写出错：{transcriptionError}</p>
+        )}
       </div>
     </div>
   );

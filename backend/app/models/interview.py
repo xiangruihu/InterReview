@@ -7,12 +7,13 @@ class InterviewData(BaseModel):
     title: str
     company: str
     position: str
-    status: Literal['待上传', '分析中', '已完成', '分析失败']
+    status: Literal['待上传', '已上传文件', '分析中', '已完成', '分析失败']
     date: datetime
     createdAt: datetime
     updatedAt: datetime
     fileUrl: Optional[str] = None
     fileType: Optional[str] = None
+    transcriptText: Optional[str] = None
 
 class InterviewCreate(BaseModel):
     title: str

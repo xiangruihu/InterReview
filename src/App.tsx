@@ -41,8 +41,11 @@ interface InterviewData {
   title: string;
   company: string;
   position: string;
-  status: '待上传' | '分析中' | '已完成';
+  status: '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
   date: string;
+  fileUrl?: string;
+  fileType?: string;
+  transcriptText?: string;
 }
 
 interface Message {
@@ -360,10 +363,21 @@ export default function App() {
   };
 
   // Handle file upload complete
-  const handleUploadComplete = (file: File) => {
-    // Update current step to show file is uploaded
+  const handleUploadComplete = (info: { fileName: string; filePath: string; fileType?: string }) => {
     setCurrentStep(2);
-    console.log('File uploaded:', file.name);
+    if (selectedInterviewId) {
+      updateInterview(selectedInterviewId, {
+        status: '已上传文件',
+        fileUrl: info.filePath,
+        fileType: info.fileType,
+      });
+    }
+    toast.success(`「${info.fileName}」上传完成`);
+  };
+
+  const handleTranscriptUpdate = (text: string) => {
+    if (!selectedInterviewId) return;
+    updateInterview(selectedInterviewId, { transcriptText: text });
   };
 
   // Handle start analysis
@@ -565,8 +579,15 @@ export default function App() {
                 
                 {/* Upload Area */}
                 <UploadArea 
+                  userId={currentUserProfile?.userId}
+                  interviewId={selectedInterviewId}
+                  interviewTitle={currentInterview?.title}
+                  interviewStatus={currentInterview?.status}
+                  interviewFileUrl={currentInterview?.fileUrl}
                   onUploadComplete={handleUploadComplete} 
                   onStartAnalysis={handleStartAnalysis}
+                  initialTranscript={currentInterview?.transcriptText}
+                  onTranscriptUpdate={handleTranscriptUpdate}
                 />
               </>
             ) : (

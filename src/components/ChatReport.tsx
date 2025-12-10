@@ -35,8 +35,9 @@ interface InterviewData {
   title: string;
   company: string;
   position: string;
-  status: '待上传' | '分析中' | '已完成';
+  status: '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
   date: string;
+  transcriptText?: string;
 }
 
 interface Message {

@@ -10,13 +10,18 @@ export interface UserProfileDTO {
   createdAt?: string;
 }
 
+export type InterviewStatus = '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
+
 export interface InterviewDataDTO {
   id: string;
   title: string;
   company: string;
   position: string;
-  status: '待上传' | '分析中' | '已完成';
+  status: InterviewStatus;
   date: string;
+  fileUrl?: string;
+  fileType?: string;
+  transcriptText?: string;
 }
 
 export interface MessageDTO {
@@ -95,3 +100,84 @@ export async function saveAnalysis(userId: string, analysis: AnalysisMap): Promi
   if (!resp.ok) throw new Error(`saveAnalysis failed: ${resp.status}`);
 }
 
+export interface UploadInterviewResponse {
+  success: boolean;
+  message: string;
+  file_path: string;
+  file_name: string;
+  file_size: number;
+  file_type?: string;
+}
+
+export interface TranscriptPayload {
+  interviewId: string;
+  text: string;
+  model?: string;
+  filePath?: string;
+  createdAt?: string;
+}
+
+export async function uploadInterviewFile(
+  userId: string,
+  interviewId: string,
+  file: File
+): Promise<UploadInterviewResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const resp = await fetch(`${BACKEND_BASE}/upload/interview/${userId}/${interviewId}`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`uploadInterviewFile failed: ${resp.status} ${text}`);
+  }
+
+  return resp.json();
+}
+
+export async function transcribeInterview(
+  userId: string,
+  interviewId: string,
+  model?: string
+): Promise<TranscriptPayload> {
+  const resp = await fetch(
+    `${BACKEND_BASE}/interviews/${interviewId}/transcribe?user_id=${encodeURIComponent(userId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    }
+  );
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`transcribeInterview failed: ${resp.status} ${text}`);
+  }
+
+  const data = await resp.json();
+  return data?.data;
+}
+
+export async function fetchTranscript(
+  userId: string,
+  interviewId: string
+): Promise<TranscriptPayload | null> {
+  const resp = await fetch(
+    `${BACKEND_BASE}/interviews/${interviewId}/transcription?user_id=${encodeURIComponent(userId)}`
+  );
+
+  if (resp.status === 404) {
+    return null;
+  }
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`fetchTranscript failed: ${resp.status} ${text}`);
+  }
+
+  const data = await resp.json();
+  return data?.data || null;
+}

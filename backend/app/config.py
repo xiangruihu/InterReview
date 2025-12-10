@@ -1,10 +1,9 @@
-import os
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # API Keys
-    DASHSCOPE_API_KEY: str
-    SILICONFLOW_API_KEY: str
+    DASHSCOPE_API_KEY: str = ""
+    SILICONFLOW_API_KEY: str = ""
 
     # File Storage
     UPLOAD_DIR: str = "./uploads"

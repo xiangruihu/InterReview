@@ -15,7 +15,7 @@ interface InterviewData {
   title: string;
   company: string;
   position: string;
-  status: '待上传' | '分析中' | '已完成';
+  status: '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
   date: string;
 }
 
@@ -40,8 +40,12 @@ export function DeleteConfirmDialog({ open, onOpenChange, interview, onConfirm }
     switch (status) {
       case '已完成':
         return 'text-green-700 bg-green-50 border-green-200';
+      case '已上传文件':
+        return 'text-blue-700 bg-blue-50 border-blue-200';
       case '分析中':
         return 'text-blue-700 bg-blue-50 border-blue-200';
+      case '分析失败':
+        return 'text-red-600 bg-red-50 border-red-200';
       case '待上传':
         return 'text-gray-700 bg-gray-50 border-gray-200';
       default:

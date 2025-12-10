@@ -5,7 +5,7 @@ interface InterviewListItemProps {
   title: string;
   company: string;
   position: string;
-  status: '待上传' | '分析中' | '已完成';
+  status: '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
   date: string;
   isActive: boolean;
   onRename?: (newTitle: string) => void;
@@ -22,10 +22,12 @@ export function InterviewListItem({
   onRename,
   onDelete,
 }: InterviewListItemProps) {
-  const statusColors = {
+  const statusColors: Record<string, string> = {
     '待上传': 'bg-gray-100 text-gray-700',
+    '已上传文件': 'bg-blue-100 text-blue-700',
     '分析中': 'bg-yellow-100 text-yellow-700',
     '已完成': 'bg-green-100 text-green-700',
+    '分析失败': 'bg-red-100 text-red-600',
   };
 
   const [showMenu, setShowMenu] = useState(false);
@@ -180,7 +182,7 @@ export function InterviewListItem({
         {/* Status and Date */}
         <div className="flex items-center justify-between">
           <span
-            className={`text-xs px-2 py-0.5 rounded ${statusColors[status]}`}
+            className={`text-xs px-2 py-0.5 rounded ${statusColors[status] || 'bg-gray-100 text-gray-700'}`}
           >
             {status}
           </span>

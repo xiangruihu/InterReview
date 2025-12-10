@@ -1,13 +1,23 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 from typing import Optional
+from pathlib import Path
+from datetime import datetime
+from pydantic import BaseModel
+import logging
 from app.models.interview import InterviewData, InterviewCreate, InterviewUpdate
 from app.models.user import UserProfile
 from app.services.storage_service import StorageService
+from app.services.transcription_service import TranscriptionService
+from app.config import settings
 import uuid
-from datetime import datetime
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 storage = StorageService()
+transcriber = TranscriptionService(settings.SILICONFLOW_API_KEY)
+logger = logging.getLogger(__name__)
+
+class TranscriptionRequest(BaseModel):
+    model: Optional[str] = None
 
 @router.post("/", response_model=dict)
 async def create_interview(user_id: str, interview_data: InterviewCreate):
@@ -128,3 +138,91 @@ async def get_all_interviews(user_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取面试列表失败: {str(e)}")
+
+@router.post("/{interview_id}/transcribe", response_model=dict)
+async def transcribe_interview(
+    user_id: str,
+    interview_id: str,
+    payload: TranscriptionRequest = Body(default=TranscriptionRequest())
+):
+    """
+    对指定面试的上传文件执行转录
+    """
+    interviews = storage.get_interviews(user_id)
+    interview = next((i for i in interviews if i.get('id') == interview_id), None)
+
+    if not interview:
+        raise HTTPException(status_code=404, detail="面试不存在")
+
+    file_url = interview.get('fileUrl')
+    if not file_url:
+        raise HTTPException(status_code=400, detail="尚未上传面试文件，无法转录")
+
+    file_path = Path(file_url)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="上传文件不存在，请重新上传")
+
+    model = payload.model or settings.TRANSCRIPTION_MODEL
+
+    try:
+        transcript_text = await transcriber.transcribe_audio(file_path, model=model)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"转录失败: {str(e)}")
+
+    if not transcript_text:
+        raise HTTPException(status_code=500, detail="转录失败，请稍后重试")
+
+    transcript_payload = {
+        "interviewId": interview_id,
+        "text": transcript_text,
+        "model": model,
+        "filePath": str(file_path),
+        "createdAt": datetime.utcnow().isoformat()
+    }
+
+    storage.save_transcript(user_id, interview_id, transcript_payload)
+    storage.update_interview(user_id, interview_id, {"transcriptText": transcript_text})
+    logger.info(
+        "[Transcribe] user=%s interview=%s len=%d preview=%s",
+        user_id,
+        interview_id,
+        len(transcript_text or ""),
+        (transcript_text or "")[:200]
+    )
+
+    return {
+        "success": True,
+        "data": transcript_payload
+    }
+
+@router.get("/{interview_id}/transcription", response_model=dict)
+async def get_transcription(user_id: str, interview_id: str):
+    """
+    获取指定面试的最新转录结果
+    """
+    transcript = storage.get_transcript(user_id, interview_id)
+
+    if not transcript:
+        interviews = storage.get_interviews(user_id)
+        interview = next((i for i in interviews if i.get('id') == interview_id), None)
+        fallback_text = interview.get("transcriptText") if interview else None
+
+        if fallback_text:
+            transcript = {
+                "interviewId": interview_id,
+                "text": fallback_text,
+                "model": "unknown",
+                "filePath": interview.get("fileUrl"),
+                "createdAt": interview.get("updatedAt")
+            }
+        else:
+            return {
+                "success": True,
+                "data": None,
+                "message": "尚未生成转录"
+            }
+
+    return {
+        "success": True,
+        "data": transcript
+    }

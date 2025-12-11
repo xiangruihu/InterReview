@@ -11,6 +11,58 @@ import {
 import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner@2.0.3';
 import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../utils/backend';
+import { formatDuration } from '../utils/time';
+
+const MEDIA_DURATION_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.mp4'];
+
+const isMediaFileForDuration = (file: File) => {
+  const type = (file.type || '').toLowerCase();
+  if (type.startsWith('audio/') || type.startsWith('video/')) {
+    return true;
+  }
+  const lowerName = file.name.toLowerCase();
+  return MEDIA_DURATION_EXTENSIONS.some(ext => lowerName.endsWith(ext));
+};
+
+const getMediaElementTag = (file: File): 'audio' | 'video' => {
+  const type = (file.type || '').toLowerCase();
+  if (type.startsWith('video/')) return 'video';
+  if (type.startsWith('audio/')) return 'audio';
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith('.mp4')) return 'video';
+  return 'audio';
+};
+
+const getMediaDuration = (file: File): Promise<number | null> => {
+  if (!isMediaFileForDuration(file)) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise(resolve => {
+    const objectUrl = URL.createObjectURL(file);
+    const mediaEl = document.createElement(getMediaElementTag(file));
+    mediaEl.preload = 'metadata';
+
+    const cleanup = () => {
+      mediaEl.removeAttribute('src');
+      mediaEl.load();
+      URL.revokeObjectURL(objectUrl);
+    };
+
+    mediaEl.onloadedmetadata = () => {
+      const duration = Number.isFinite(mediaEl.duration) ? mediaEl.duration : null;
+      cleanup();
+      resolve(duration);
+    };
+
+    mediaEl.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    mediaEl.src = objectUrl;
+  });
+};
 
 interface UploadAreaProps {
   userId?: string;
@@ -19,10 +71,12 @@ interface UploadAreaProps {
   interviewStatus?: string;
   interviewFileUrl?: string;
   initialTranscript?: string;
-  onUploadComplete?: (info: { fileName: string; filePath: string; fileType?: string }) => void;
+  onUploadComplete?: (info: { fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => void;
   onStartAnalysis?: () => void;
   onTranscriptUpdate?: (text: string) => void;
 }
+
+type UploadStage = 'idle' | 'uploading' | 'transcribing';
 
 export function UploadArea({
   userId,
@@ -39,6 +93,7 @@ export function UploadArea({
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
   const [transcript, setTranscript] = useState(initialTranscript || '');
@@ -92,22 +147,33 @@ export function UploadArea({
 
     try {
       setIsUploading(true);
+      setUploadStage('uploading');
       setUploadProgress(10);
-      const result = await uploadInterviewFile(userId, interviewId, file);
-      setUploadProgress(100);
+      const durationPromise = getMediaDuration(file);
+      const [result, durationSeconds] = await Promise.all([
+        uploadInterviewFile(userId, interviewId, file),
+        durationPromise,
+      ]);
+      const durationText = formatDuration(durationSeconds ?? undefined);
+      setUploadProgress(60);
       setUploadedFile(file);
       toast.success(`「${file.name}」上传成功`);
       onUploadComplete?.({
         fileName: file.name,
         filePath: result.file_path,
         fileType: result.file_type || file.type,
+        durationSeconds: durationSeconds ?? undefined,
+        durationText: durationText,
       });
-      await runTranscription();
+      setUploadStage('transcribing');
+      await runTranscription({ trackUploadProgress: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : '上传失败，请稍后重试';
       toast.error('上传失败', { description: message });
       setUploadProgress(0);
+      setUploadStage('idle');
     } finally {
+      setUploadStage('idle');
       setIsUploading(false);
     }
   };
@@ -171,7 +237,7 @@ export function UploadArea({
     return FileAudio;
   };
 
-  const runTranscription = async () => {
+  const runTranscription = async (options?: { trackUploadProgress?: boolean }) => {
     if (!userId || !interviewId) {
       toast.error('请先选择面试');
       return;
@@ -182,9 +248,15 @@ export function UploadArea({
       return;
     }
 
+    let progressTimer: ReturnType<typeof setInterval> | null = null;
     try {
       setIsTranscribing(true);
       setTranscriptionError(null);
+      if (options?.trackUploadProgress) {
+        progressTimer = setInterval(() => {
+          setUploadProgress(prev => (prev >= 95 ? prev : prev + 1));
+        }, 400);
+      }
       const transcriptData = await transcribeInterview(userId, interviewId);
       const text = transcriptData?.text || '';
       setTranscript(text);
@@ -196,6 +268,16 @@ export function UploadArea({
       setTranscriptionError(message);
       toast.error('转写失败', { description: message });
     } finally {
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      if (options?.trackUploadProgress) {
+        setUploadProgress(100);
+      }
+      if (uploadStage !== 'idle') {
+        setUploadStage('idle');
+      }
       setIsTranscribing(false);
     }
   };
@@ -250,6 +332,7 @@ export function UploadArea({
   useEffect(() => {
     setUploadedFile(null);
     setUploadProgress(0);
+    setUploadStage('idle');
   }, [userId, interviewId]);
 
   return (
@@ -303,22 +386,6 @@ export function UploadArea({
                 支持 MP3, WAV, M4A, MP4, TXT，单文件 ≤ 200MB
               </p>
             </div>
-
-            {/* Upload Progress */}
-            {isUploading && (
-              <div className="pt-2 max-w-md mx-auto">
-                <div className="flex items-center justify-between text-sm mb-2">
-                  <span className="text-gray-600">上传中...</span>
-                  <span className="text-blue-600">{uploadProgress}%</span>
-                </div>
-                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 transition-all duration-300"
-                    style={{ width: `${uploadProgress}%` }}
-                  ></div>
-                </div>
-              </div>
-            )}
 
             {/* Upload Button */}
             {!isUploading && (
@@ -377,7 +444,12 @@ export function UploadArea({
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
                 onClick={handleUploadClick}
-                className="px-5 py-2.5 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg transition-colors"
+                disabled={uploadStage !== 'idle'}
+                className={`px-5 py-2.5 border rounded-lg transition-colors ${
+                  uploadStage !== 'idle'
+                    ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
               >
                 重新上传
               </button>
@@ -388,6 +460,22 @@ export function UploadArea({
                 <Sparkles className="w-4 h-4" />
                 开始分析
               </button>
+            </div>
+          </div>
+        )}
+        {uploadStage !== 'idle' && (
+          <div className="pt-4 max-w-md mx-auto">
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="text-gray-600">
+                {uploadStage === 'transcribing' ? '转写中...' : '上传中...'}
+              </span>
+              <span className="text-blue-600">{uploadProgress}%</span>
+            </div>
+            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-600 transition-all duration-300"
+                style={{ width: `${uploadProgress}%` }}
+              ></div>
             </div>
           </div>
         )}
@@ -430,7 +518,7 @@ export function UploadArea({
             )}
           </div>
           <button
-            onClick={runTranscription}
+            onClick={() => runTranscription()}
             disabled={isTranscribing || !userId || !interviewId || !hasUploaded}
             className={`px-4 py-2 rounded-lg flex items-center gap-2 border transition-colors ${
               isTranscribing || !userId || !interviewId || !hasUploaded

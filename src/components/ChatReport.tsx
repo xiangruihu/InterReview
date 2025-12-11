@@ -29,6 +29,7 @@ import { useState } from 'react';
 import { ExportModal } from './ExportModal';
 import { ExportQuestionsModal } from './ExportQuestionsModal';
 import { ExportReportModal } from './ExportReportModal';
+import { formatDuration } from '../utils/time';
 
 interface InterviewData {
   id: string;
@@ -38,6 +39,8 @@ interface InterviewData {
   status: '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
   date: string;
   transcriptText?: string;
+  durationSeconds?: number;
+  durationText?: string;
 }
 
 interface Message {
@@ -242,7 +245,12 @@ function AssistantMessage({ message, interviewData, onUpdateInterview }: { messa
               />
             )}
             {message.type === 'report-summary' && (
-              <ReportSummaryContent data={message.data} />
+              <ReportSummaryContent 
+                data={{
+                  ...message.data,
+                  duration: interviewData?.durationText || formatDuration(interviewData?.durationSeconds) || message.data?.duration
+                }}
+              />
             )}
             {message.type === 'qa-detail' && (
               <QADetailContent data={message.data} />
@@ -536,6 +544,9 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
     { id: 'analysis' as const, label: '数据分析', icon: BarChart3 },
     { id: 'suggestions' as const, label: '改进建议', icon: Lightbulb }
   ];
+  const resolvedDurationText = interviewData?.durationText || formatDuration(interviewData?.durationSeconds) || data?.duration;
+  const reportData = resolvedDurationText ? { ...data, duration: resolvedDurationText } : data;
+  const overviewData = { ...reportData };
 
   return (
     <div className="space-y-4">
@@ -544,7 +555,7 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
         <div>
           <h3 className="text-gray-900 mb-1">面试分析报告已生成 ✨</h3>
           <p className="text-sm text-gray-600">
-            我已经完成了对你这场面试的全面分析，包含 {data.rounds} 个问答、关键数据统计和改进建议
+            我已经完成了对你这场面试的全面分析，包含 {reportData.rounds} 个问答、关键数据统计和改进建议
           </p>
         </div>
         <div className="flex gap-2">
@@ -704,33 +715,33 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
 
       {/* Tab Content */}
       <div className="pt-2">
-        {activeTab === 'overview' && <OverviewTab data={data} />}
+        {activeTab === 'overview' && <OverviewTab data={overviewData} />}
         {activeTab === 'qa' && (
           <QAListTab 
-            qaList={data.qaList} 
+            qaList={reportData.qaList} 
             expandedQA={expandedQA}
             setExpandedQA={setExpandedQA}
           />
         )}
-        {activeTab === 'analysis' && <AnalysisTab data={data} />}
-        {activeTab === 'suggestions' && <SuggestionsTab suggestions={data.suggestions} />}
+        {activeTab === 'analysis' && <AnalysisTab data={reportData} />}
+        {activeTab === 'suggestions' && <SuggestionsTab suggestions={reportData.suggestions} />}
       </div>
 
       {/* Export Modal */}
       <ExportModal 
         isOpen={showExportModal}
         onClose={() => setShowExportModal(false)}
-        data={data}
+        data={reportData}
       />
       <ExportQuestionsModal 
         isOpen={showExportQuestionsModal}
         onClose={() => setShowExportQuestionsModal(false)}
-        data={data}
+        data={reportData}
       />
       <ExportReportModal 
         isOpen={showExportReportModal}
         onClose={() => setShowExportReportModal(false)}
-        data={data}
+        data={reportData}
       />
     </div>
   );

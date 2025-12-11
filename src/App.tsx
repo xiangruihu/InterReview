@@ -46,6 +46,8 @@ interface InterviewData {
   fileUrl?: string;
   fileType?: string;
   transcriptText?: string;
+  durationSeconds?: number;
+  durationText?: string;
 }
 
 interface Message {
@@ -363,13 +365,15 @@ export default function App() {
   };
 
   // Handle file upload complete
-  const handleUploadComplete = (info: { fileName: string; filePath: string; fileType?: string }) => {
+  const handleUploadComplete = (info: { fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => {
     setCurrentStep(2);
     if (selectedInterviewId) {
       updateInterview(selectedInterviewId, {
         status: '已上传文件',
         fileUrl: info.filePath,
         fileType: info.fileType,
+        durationSeconds: info.durationSeconds,
+        durationText: info.durationText,
       });
     }
     toast.success(`「${info.fileName}」上传完成`);

@@ -22,6 +22,8 @@ export interface InterviewDataDTO {
   fileUrl?: string;
   fileType?: string;
   transcriptText?: string;
+  durationSeconds?: number;
+  durationText?: string;
 }
 
 export interface MessageDTO {

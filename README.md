@@ -63,21 +63,23 @@ pip install -r requirements.txt
 ```
 
 ### 3. 环境变量
-创建 `.env`（根目录即可被前后端、脚本加载），以下是关键配置：
+创建 `.env`（根目录即可被前后端、脚本加载）。可以参考 `.env.example`，把密钥替换为自己的值再重命名为 `.env`。常用 Key 如下：
 
 | 变量 | 用途 | 备注 |
 | --- | --- | --- |
 | `VITE_BACKEND_URL` | 前端调用后端的基础 URL | 默认为 `http://localhost:8000`，部署时指向网关/域名。 |
-| `VITE_DASHSCOPE_API_KEY` | 浏览器直接调用 DashScope 的 Key | 未配置时前端会回退至 Mock，避免泄露建议改由后端代理。 |
-| `DASHSCOPE_API_KEY` | 后端 `LLMService` 调用 DashScope | `llm.py` 也读取该值。 |
-| `SILICONFLOW_API_KEY` | 后端 `TranscriptionService` 调用 SenseVoice | 若仅想本地调试可设置 `MOCK_TRANSCRIPTION=true`。 |
+| `DASHSCOPE_API_KEY` | DashScope LLM 的唯一 Key | Vite 已配置暴露到前端，同时后端 `LLMService` / `llm.py` 也读取该值。 |
+| `SILICONFLOW_API_KEY` | SenseVoice 转写 Key | 被后端 `TranscriptionService`、`transcribe.py` 使用。 |
 | `MOCK_TRANSCRIPTION` | 转写 Mock 开关 | 任意 truthy 值代表强制走本地示例，便于开发。 |
 | `UPLOAD_DIR` | 可选，默认 `./uploads` | 通过 `backend/app/config.py` 覆盖。 |
 | `REDIS_URL` | Celery/任务队列配置 | 当前未使用，预留。 |
 | `SECRET_KEY` | JWT/Session 用，默认占位 | 部署务必修改。 |
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` | Supabase 连接参数 | `backend/test_supabase.mjs` 会读取验证。 |
 
-> 建议新增 `.env.example` 并在 PR 中同步更新变量说明，确保多人协作一致。
+> Key 申请入口：
+> - DashScope：https://dashscope.console.aliyun.com/apiKey
+> - SiliconFlow：https://cloud.siliconflow.cn/me/account/ak
+
 
 ### 4. 启动服务
 ```bash
@@ -180,7 +182,7 @@ npm run dev
 6. **Review 流程**：至少 1 名同伴 Review，重点关注 API 兼容性、密钥管理、性能（文件上传/LLM 调用）等风险点。
 
 ## 测试与排错
-- **LLM Key 缺失**：前端 console 会提示 “未检测到 VITE_DASHSCOPE_API_KEY，使用本地 Mock”，可放心用于 UI 联调。
+- **LLM Key 缺失**：前端 console 会提示 “未检测到 DASHSCOPE_API_KEY，使用本地 Mock”，可放心用于 UI 联调。
 - **转写失败**：`TranscriptionService` 会 fallback 到 mock，查看后端日志中 `[Upload][Transcribe]` 相关输出定位原因。
 - **文件过大/格式错误**：`UploadArea` 和 `/upload` 均会校验（200 MB、扩展名/MIME），错误信息会通过 `toast` 返回。
 - **数据未持久化**：确认 `backend/data/<userId>/` 是否有写权限；Docker/部署环境需挂载持久卷或切换到 Supabase。

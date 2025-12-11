@@ -15,13 +15,13 @@ const fallbackMock: Record<string, string> = {
 function fallbackFromHistory(messages: ChatMessage[]): string {
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   if (!lastUser) {
-    return '（本地 Mock）未配置 LLM API Key，返回占位回答。请在 .env 中设置 VITE_DASHSCOPE_API_KEY 后重试。';
+    return '（本地 Mock）未配置 LLM API Key，返回占位回答。请在 .env 中设置 DASHSCOPE_API_KEY 后重试。';
   }
   const q = lastUser.content || '';
   for (const [k, v] of Object.entries(fallbackMock)) {
     if (q.includes(k) || k.includes(q)) return v;
   }
-  return '（本地 Mock）未配置 LLM API Key，返回占位回答。请在 .env 中设置 VITE_DASHSCOPE_API_KEY 后重试。';
+  return '（本地 Mock）未配置 LLM API Key，返回占位回答。请在 .env 中设置 DASHSCOPE_API_KEY 后重试。';
 }
 
 // 将消息长度裁剪，避免超过模型上下文窗口（简单字符数近似）
@@ -41,14 +41,14 @@ function trimMessages(messages: ChatMessage[], maxChars = 8000): ChatMessage[] {
 
 // 核心：基于多轮对话消息调用 LLM
 export async function chatWithLLM(messages: ChatMessage[], options?: { model?: string; stream?: boolean }): Promise<string> {
-  const apiKey = import.meta.env.VITE_DASHSCOPE_API_KEY as string | undefined;
+  const apiKey = import.meta.env.DASHSCOPE_API_KEY as string | undefined;
   const baseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
   const model = options?.model || 'qwen3-max';
   const stream = options?.stream ?? false; // 目前仍使用非流式，前端做打字机效果
 
   // 若没配 Key，走本地兜底
   if (!apiKey) {
-    console.warn('[LLM] 未检测到 VITE_DASHSCOPE_API_KEY，使用本地 Mock 兜底');
+    console.warn('[LLM] 未检测到 DASHSCOPE_API_KEY，使用本地 Mock 兜底');
     return fallbackFromHistory(messages);
   }
 

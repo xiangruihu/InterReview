@@ -17,6 +17,7 @@ import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
 import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
 import { registerUser, fetchInterviews, fetchMessages, saveInterviews, saveMessages } from './utils/backend';
+import { getMockAnalysisData, type AnalysisData } from './utils/mockAnalysis';
 
 // 用户档案模型
 interface UserProfile {
@@ -121,6 +122,7 @@ export default function App() {
   
   // Chat messages state - separate messages for each interview
   const [interviewMessages, setInterviewMessages] = useState<Record<string, Message[]>>({});
+  const [analysisResults, setAnalysisResults] = useState<Record<string, AnalysisData>>({});
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
   const [isAITyping, setIsAITyping] = useState(false);
   
@@ -400,6 +402,17 @@ export default function App() {
       updateInterview(selectedInterviewId, { status: '已完成' });
       setViewMode('report');
       
+      if (selectedInterviewId) {
+        const mockData = getMockAnalysisData({
+          durationSeconds: currentInterview?.durationSeconds,
+          durationText: currentInterview?.durationText,
+        });
+        setAnalysisResults((prev) => ({
+          ...prev,
+          [selectedInterviewId]: mockData,
+        }));
+      }
+      
       toast.success('分析完成！', {
         description: '面试报告已生成',
       });
@@ -505,6 +518,7 @@ export default function App() {
 
   // Get current interview messages
   const currentMessages = interviewMessages[selectedInterviewId] || [];
+  const currentAnalysis = selectedInterviewId ? analysisResults[selectedInterviewId] : undefined;
 
   // Show login page if not logged in
   if (!isLoggedIn) {
@@ -602,6 +616,7 @@ export default function App() {
                 {/* Chat Report - Conversation Style */}
                 <ChatReport 
                   interviewData={currentInterview}
+                  analysisData={currentAnalysis}
                   onUpdateInterview={(data) => updateInterview(selectedInterviewId, data)}
                 />
                 

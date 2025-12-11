@@ -1,6 +1,7 @@
 import { X, Download, Share2, Image as ImageIcon, FileCode, Copy, Check, CheckSquare, Square } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { useState, forwardRef } from 'react';
 import { toast } from 'sonner';
+import { generateShareImage } from '../utils/shareImage';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -15,8 +16,6 @@ export function ExportModal({ isOpen, onClose, data }: ExportModalProps) {
   const [selectedQuestions, setSelectedQuestions] = useState<Set<number>>(
     new Set(data.qaList?.map((qa: any) => qa.id) || [])
   );
-  const exportRef = useRef<HTMLDivElement>(null);
-
   if (!isOpen) return null;
 
   const toggleQuestion = (id: number) => {
@@ -52,6 +51,30 @@ export function ExportModal({ isOpen, onClose, data }: ExportModalProps) {
 
   const getSuggestionDesc = (item: any) => item?.desc ?? item?.description ?? '';
   const getStrengthDesc = (item: any) => item?.desc ?? item?.detail ?? '';
+
+  const handleDownloadImage = async () => {
+    try {
+      const shareData = getFilteredData();
+      const dataUrl = await generateShareImage({
+        duration: shareData.duration,
+        rounds: shareData.rounds,
+        score: shareData.score,
+        passRate: shareData.passRate,
+        qaList: shareData.qaList,
+        suggestions: shareData.suggestions || [],
+      });
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `面试复盘-${new Date().toLocaleDateString()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('图片已下载');
+    } catch (error) {
+      const description = error instanceof Error ? error.message : '请稍后重试';
+      toast.error('图片下载失败', { description });
+    }
+  };
 
   const generateMarkdown = () => {
     const filteredData = getFilteredData();
@@ -299,7 +322,7 @@ ${s.actions.map((a: string) => `- ${a}`).join('\n')}
               <div className="px-6 py-4">
                 <h3 className="text-gray-900 text-sm mb-3">预览</h3>
                 {selectedFormat === 'image' ? (
-                  <ImagePreview data={getFilteredData()} ref={exportRef} />
+                  <ImagePreview data={getFilteredData()} />
                 ) : (
                   <MarkdownPreview markdown={generateMarkdown()} />
                 )}
@@ -357,7 +380,7 @@ ${s.actions.map((a: string) => `- ${a}`).join('\n')}
                   </button>
                 )}
                 <button
-                  onClick={selectedFormat === 'markdown' ? handleDownloadMarkdown : () => {}}
+                  onClick={selectedFormat === 'markdown' ? handleDownloadMarkdown : handleDownloadImage}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm transition-colors flex items-center gap-2"
                 >
                   <Download className="w-4 h-4" />
@@ -372,9 +395,14 @@ ${s.actions.map((a: string) => `- ${a}`).join('\n')}
   );
 }
 
-const ImagePreview = ({ data }: { data: any }) => {
+const ImagePreview = forwardRef<HTMLDivElement, { data: any }>(({ data }, ref) => {
+  const qaList = data.qaList || [];
   return (
-    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-8 space-y-6">
+    <div
+      ref={ref}
+      className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-8 space-y-6"
+      style={{ fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
+    >
       {/* Header */}
       <div className="text-center space-y-2">
         <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-3">
@@ -406,9 +434,9 @@ const ImagePreview = ({ data }: { data: any }) => {
 
       {/* Key Questions */}
       <div className="bg-white rounded-xl p-5 space-y-3">
-        <h3 className="text-gray-900 text-sm mb-3">🔥 高频问题 Top 5</h3>
-        {data.qaList.slice(0, 5).map((qa: any, index: number) => (
-          <div key={qa.id} className="flex items-start gap-3">
+        <h3 className="text-gray-900 text-sm mb-3">🔥 精选问答（共 {qaList.length} 个）</h3>
+        {qaList.map((qa: any, index: number) => (
+          <div key={qa.id || index} className="flex items-start gap-3">
             <div className="w-6 h-6 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 text-xs">
               {index + 1}
             </div>
@@ -434,7 +462,7 @@ const ImagePreview = ({ data }: { data: any }) => {
       {/* Suggestions */}
       <div className="bg-white rounded-xl p-5 space-y-3">
         <h3 className="text-gray-900 text-sm mb-3">💡 核心改进建议</h3>
-        {data.suggestions.map((suggestion: any, index: number) => (
+        {(data.suggestions || []).map((suggestion: any, index: number) => (
           <div key={index} className="flex items-start gap-2">
             <span className="text-blue-600 mt-1">•</span>
             <div className="flex-1">
@@ -459,7 +487,8 @@ const ImagePreview = ({ data }: { data: any }) => {
       </div>
     </div>
   );
-};
+});
+ImagePreview.displayName = 'ImagePreview';
 
 const MarkdownPreview = ({ markdown }: { markdown: string }) => {
   return (

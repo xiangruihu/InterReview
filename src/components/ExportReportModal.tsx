@@ -23,6 +23,12 @@ export function ExportReportModal({ isOpen, onClose, data }: ExportReportModalPr
   if (!isOpen) return null;
 
   const hasSelectedContent = includeOverview || includeQA || includeAnalysis || includeSuggestions;
+  const getAnswerText = (qa: any) => {
+    const answer = qa?.yourAnswer ?? qa?.answer ?? qa?.response;
+    return answer && typeof answer === 'string' && answer.trim() ? answer : '（暂无回答）';
+  };
+  const getSuggestionDesc = (s: any) => s?.desc ?? s?.description ?? '';
+  const getStrengthDesc = (item: any) => item?.desc ?? item?.detail ?? '';
 
   const generateMarkdown = () => {
     let md = `# 面试分析报告\n\n`;
@@ -43,12 +49,12 @@ export function ExportReportModal({ isOpen, onClose, data }: ExportReportModalPr
       
       md += `### ✅ 表现优秀的方面\n\n`;
       data.strengths?.forEach((s: any) => {
-        md += `- **${s.title}**: ${s.desc}\n`;
+        md += `- **${s.title}**: ${getStrengthDesc(s)}\n`;
       });
       
       md += `\n### ⚠️ 需要改进的地方\n\n`;
       data.weaknesses?.forEach((w: any) => {
-        md += `- **${w.title}**: ${w.desc}\n`;
+        md += `- **${w.title}**: ${getStrengthDesc(w)}\n`;
       });
       
       md += `\n---\n\n`;
@@ -67,7 +73,7 @@ export function ExportReportModal({ isOpen, onClose, data }: ExportReportModalPr
         }
         md += `\n\n`;
         
-        md += `**我的回答**:\n\n${qa.yourAnswer}\n\n`;
+        md += `**我的回答**:\n\n${getAnswerText(qa)}\n\n`;
         md += `---\n\n`;
       });
     }
@@ -107,7 +113,7 @@ export function ExportReportModal({ isOpen, onClose, data }: ExportReportModalPr
       
       data.suggestions?.forEach((s: any, index: number) => {
         md += `### ${index + 1}. ${s.title} (${s.priority}优先级)\n\n`;
-        md += `${s.desc}\n\n`;
+        md += `${getSuggestionDesc(s)}\n\n`;
         md += `**具体行动**:\n\n`;
         s.actions?.forEach((a: string) => {
           md += `- ${a}\n`;
@@ -142,12 +148,12 @@ export function ExportReportModal({ isOpen, onClose, data }: ExportReportModalPr
       
       text += `表现优秀的方面:\n`;
       data.strengths?.forEach((s: any) => {
-        text += `• ${s.title}: ${s.desc}\n`;
+        text += `• ${s.title}: ${getStrengthDesc(s)}\n`;
       });
       
       text += `\n需要改进的地方:\n`;
       data.weaknesses?.forEach((w: any) => {
-        text += `• ${w.title}: ${w.desc}\n`;
+        text += `• ${w.title}: ${getStrengthDesc(w)}\n`;
       });
       
       text += `\n========================================\n\n`;
@@ -166,7 +172,7 @@ export function ExportReportModal({ isOpen, onClose, data }: ExportReportModalPr
         }
         text += `\n\n`;
         
-        text += `我的回答:\n${qa.yourAnswer}\n\n`;
+        text += `我的回答:\n${getAnswerText(qa)}\n\n`;
         text += `----------------------------------------\n\n`;
       });
     }
@@ -200,7 +206,7 @@ export function ExportReportModal({ isOpen, onClose, data }: ExportReportModalPr
       
       data.suggestions?.forEach((s: any, index: number) => {
         text += `${index + 1}. ${s.title} (${s.priority}优先级)\n\n`;
-        text += `${s.desc}\n\n`;
+        text += `${getSuggestionDesc(s)}\n\n`;
         text += `具体行动:\n`;
         s.actions?.forEach((a: string) => {
           text += `• ${a}\n`;

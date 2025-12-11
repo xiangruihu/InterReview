@@ -17,6 +17,13 @@ export function ExportQuestionsModal({ isOpen, onClose, data }: ExportQuestionsM
 
   if (!isOpen) return null;
 
+  const getAnswerText = (qa: any) => {
+    const answer = qa?.yourAnswer ?? qa?.answer ?? qa?.response;
+    return answer && typeof answer === 'string' && answer.trim() ? answer : '（暂无回答）';
+  };
+  const getStrengthDesc = (item: any) => item?.desc ?? item?.detail ?? '';
+  const getSuggestionDesc = (item: any) => item?.desc ?? item?.description ?? '';
+
   const generateMarkdown = () => {
     let md = `# 面试问题清单\n\n`;
     md += `**面试日期**: ${new Date().toLocaleDateString()}\n`;
@@ -30,12 +37,12 @@ export function ExportQuestionsModal({ isOpen, onClose, data }: ExportQuestionsM
       
       md += `### 表现优秀的方面\n\n`;
       data.strengths?.forEach((s: any) => {
-        md += `- **${s.title}**: ${s.desc}\n`;
+        md += `- **${s.title}**: ${getStrengthDesc(s)}\n`;
       });
       
       md += `\n### 需要改进的地方\n\n`;
       data.weaknesses?.forEach((w: any) => {
-        md += `- **${w.title}**: ${w.desc}\n`;
+        md += `- **${w.title}**: ${getStrengthDesc(w)}\n`;
       });
       
       md += `\n---\n\n`;
@@ -53,7 +60,7 @@ export function ExportQuestionsModal({ isOpen, onClose, data }: ExportQuestionsM
       md += `\n\n`;
       
       if (includeAnswers) {
-        md += `**我的回答**:\n\n${qa.yourAnswer}\n\n`;
+        md += `**我的回答**:\n\n${getAnswerText(qa)}\n\n`;
         
         if (qa.evaluation) {
           md += `**AI 点评**:\n\n${qa.evaluation}\n\n`;
@@ -87,12 +94,12 @@ export function ExportQuestionsModal({ isOpen, onClose, data }: ExportQuestionsM
       
       text += `表现优秀的方面:\n`;
       data.strengths?.forEach((s: any) => {
-        text += `• ${s.title}: ${s.desc}\n`;
+        text += `• ${s.title}: ${getStrengthDesc(s)}\n`;
       });
       
       text += `\n需要改进的地方:\n`;
       data.weaknesses?.forEach((w: any) => {
-        text += `• ${w.title}: ${w.desc}\n`;
+        text += `• ${w.title}: ${getStrengthDesc(w)}\n`;
       });
       
       text += `\n========================================\n\n`;
@@ -111,7 +118,7 @@ export function ExportQuestionsModal({ isOpen, onClose, data }: ExportQuestionsM
       text += `\n\n`;
       
       if (includeAnswers) {
-        text += `我的回答:\n${qa.yourAnswer}\n\n`;
+        text += `我的回答:\n${getAnswerText(qa)}\n\n`;
         
         if (qa.evaluation) {
           text += `AI 点评:\n${qa.evaluation}\n\n`;

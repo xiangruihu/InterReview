@@ -45,6 +45,14 @@ export function ExportModal({ isOpen, onClose, data }: ExportModalProps) {
     };
   };
 
+  const getAnswerText = (qa: any) => {
+    const answer = qa?.yourAnswer ?? qa?.answer ?? qa?.response;
+    return answer && typeof answer === 'string' && answer.trim() ? answer : '（暂无回答）';
+  };
+
+  const getSuggestionDesc = (item: any) => item?.desc ?? item?.description ?? '';
+  const getStrengthDesc = (item: any) => item?.desc ?? item?.detail ?? '';
+
   const generateMarkdown = () => {
     const filteredData = getFilteredData();
     const md = `# 面试复盘笔记
@@ -56,10 +64,10 @@ export function ExportModal({ isOpen, onClose, data }: ExportModalProps) {
 - **通过概率**: ${filteredData.passRate}%
 
 ## ✅ 表现优秀的方面
-${filteredData.strengths.map((s: any) => `- **${s.title}**: ${s.desc}`).join('\n')}
+${filteredData.strengths.map((s: any) => `- **${s.title}**: ${getStrengthDesc(s)}`).join('\n')}
 
 ## ⚠️ 需要改进的地方
-${filteredData.weaknesses.map((w: any) => `- **${w.title}**: ${w.desc}`).join('\n')}
+${filteredData.weaknesses.map((w: any) => `- **${w.title}**: ${getStrengthDesc(w)}`).join('\n')}
 
 ## 📝 完整问答记录
 
@@ -68,7 +76,7 @@ ${filteredData.qaList.map((qa: any, index: number) => `### Q${index + 1}: ${qa.q
 **分类**: ${qa.category} | **得分**: ${qa.score}分
 
 **我的回答**:
-${qa.yourAnswer}
+${getAnswerText(qa)}
 
 ---
 `).join('\n')}
@@ -77,7 +85,7 @@ ${qa.yourAnswer}
 
 ${filteredData.suggestions.map((s: any, index: number) => `### ${index + 1}. ${s.title} (${s.priority}优先级)
 
-${s.desc}
+${getSuggestionDesc(s)}
 
 **具体行动**:
 ${s.actions.map((a: string) => `- ${a}`).join('\n')}

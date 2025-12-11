@@ -1,2 +1,4 @@
 # *.mp3
 *.env
+backend/data/*
+InterReview.zip

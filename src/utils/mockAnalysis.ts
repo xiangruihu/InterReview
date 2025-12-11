@@ -1,5 +1,6 @@
 import rawData from '../../data/qa_pairs.json';
 import { formatDuration } from './time';
+import type { AnalysisData, QAItem, StrengthItem, SuggestionItem } from '../types/analysis';
 
 interface RawQAPair {
   id: number;
@@ -22,43 +23,6 @@ interface RawSuggestion {
   description?: string;
   priority?: string;
   actions?: string[];
-}
-
-export interface QAItem {
-  id: number;
-  question: string;
-  questioner?: string;
-  questionTime?: string;
-  answer: string;
-  answerer?: string;
-  answerTime?: string;
-  notes?: string;
-  score?: number;
-  category?: string;
-}
-
-export interface StrengthItem {
-  title: string;
-  desc: string;
-}
-
-export interface SuggestionItem {
-  title: string;
-  desc: string;
-  priority: '高' | '中' | '低';
-  actions: string[];
-}
-
-export interface AnalysisData {
-  duration: string;
-  rounds: number;
-  score: number;
-  passRate: number;
-  strengths: StrengthItem[];
-  weaknesses: StrengthItem[];
-  qaList: QAItem[];
-  suggestions: SuggestionItem[];
-  quickSummary?: string;
 }
 
 interface RawFileShape {
@@ -128,5 +92,6 @@ export function getMockAnalysisData(params?: { durationSeconds?: number; duratio
     qaList,
     suggestions,
     quickSummary: raw.quick_summary,
+    generatedAt: new Date().toISOString(),
   };
 }

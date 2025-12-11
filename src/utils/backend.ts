@@ -1,6 +1,8 @@
 // 简易后端 API 客户端（FastAPI）
 // 读取环境变量 VITE_BACKEND_URL，默认 http://localhost:8000
 
+import type { AnalysisData } from '../types/analysis';
+
 export const BACKEND_BASE = (import.meta.env.VITE_BACKEND_URL as string) || 'http://localhost:8000';
 
 export interface UserProfileDTO {
@@ -100,6 +102,34 @@ export async function saveAnalysis(userId: string, analysis: AnalysisMap): Promi
     body: JSON.stringify(analysis),
   });
   if (!resp.ok) throw new Error(`saveAnalysis failed: ${resp.status}`);
+}
+
+export interface AnalyzeInterviewPayload {
+  model?: string;
+  maxPairs?: number;
+}
+
+export async function analyzeInterviewReport(
+  userId: string,
+  interviewId: string,
+  payload?: AnalyzeInterviewPayload
+): Promise<AnalysisData> {
+  const resp = await fetch(
+    `${BACKEND_BASE}/interviews/${interviewId}/analyze?user_id=${encodeURIComponent(userId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }
+  );
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`analyzeInterviewReport failed: ${resp.status} ${text}`);
+  }
+
+  const data = await resp.json();
+  return data?.data as AnalysisData;
 }
 
 export interface UploadInterviewResponse {

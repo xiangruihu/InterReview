@@ -14,6 +14,7 @@ import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../ut
 import { formatDuration } from '../utils/time';
 
 const MEDIA_DURATION_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.mp4'];
+const TEXT_EXTENSIONS = ['.txt'];
 
 const isMediaFileForDuration = (file: File) => {
   const type = (file.type || '').toLowerCase();
@@ -22,6 +23,22 @@ const isMediaFileForDuration = (file: File) => {
   }
   const lowerName = file.name.toLowerCase();
   return MEDIA_DURATION_EXTENSIONS.some(ext => lowerName.endsWith(ext));
+};
+
+const isTextTranscriptFile = (file: File) => {
+  const type = (file.type || '').toLowerCase();
+  if (type === 'text/plain') return true;
+  const lowerName = file.name.toLowerCase();
+  return TEXT_EXTENSIONS.some(ext => lowerName.endsWith(ext));
+};
+
+const readTextTranscript = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(reader.error || new Error('读取文本失败'));
+    reader.readAsText(file, 'utf-8');
+  });
 };
 
 const getMediaElementTag = (file: File): 'audio' | 'video' => {
@@ -149,6 +166,7 @@ export function UploadArea({
       setIsUploading(true);
       setUploadStage('uploading');
       setUploadProgress(10);
+      const isTextFile = isTextTranscriptFile(file);
       const durationPromise = getMediaDuration(file);
       const [result, durationSeconds] = await Promise.all([
         uploadInterviewFile(userId, interviewId, file),
@@ -165,8 +183,25 @@ export function UploadArea({
         durationSeconds: durationSeconds ?? undefined,
         durationText: durationText,
       });
-      setUploadStage('transcribing');
-      await runTranscription({ trackUploadProgress: true });
+      if (isTextFile) {
+        try {
+          const text = await readTextTranscript(file);
+          setTranscript(text);
+          const updatedAt = new Date().toISOString();
+          setTranscriptUpdatedAt(updatedAt);
+          onTranscriptUpdate?.(text);
+          toast.success('已导入文本转录内容');
+        } catch (readError) {
+          const message = readError instanceof Error ? readError.message : '读取文本失败';
+          toast.error('导入文本失败', { description: message });
+        } finally {
+          setUploadStage('idle');
+          setIsTranscribing(false);
+        }
+      } else {
+        setUploadStage('transcribing');
+        await runTranscription({ trackUploadProgress: true });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '上传失败，请稍后重试';
       toast.error('上传失败', { description: message });

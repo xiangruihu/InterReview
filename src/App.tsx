@@ -16,8 +16,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
 import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
-import { registerUser, fetchInterviews, fetchMessages, saveInterviews, saveMessages } from './utils/backend';
-import { getMockAnalysisData, type AnalysisData } from './utils/mockAnalysis';
+import { registerUser, fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport } from './utils/backend';
+import { getMockAnalysisData } from './utils/mockAnalysis';
+import type { AnalysisData } from './types/analysis';
 
 // 用户档案模型
 interface UserProfile {
@@ -154,6 +155,13 @@ export default function App() {
     }
   }, [interviewMessages, currentUserProfile]);
 
+  // 用户维度持久化：分析结果（本地备份）
+  useEffect(() => {
+    if (currentUserProfile) {
+      localStorage.setItem(`interreview_analysis_${currentUserProfile.userId}`, JSON.stringify(analysisResults));
+    }
+  }, [analysisResults, currentUserProfile]);
+
   // 同步到后端：面试列表
   useEffect(() => {
     if (!currentUserProfile || !hasLoadedRemoteData) return;
@@ -173,6 +181,17 @@ export default function App() {
       }
     })();
   }, [interviewMessages, currentUserProfile?.userId, hasLoadedRemoteData]);
+
+  // 同步到后端：分析结果
+  useEffect(() => {
+    if (!currentUserProfile || !hasLoadedRemoteData) return;
+    if (!analysisResults || Object.keys(analysisResults).length === 0) return;
+    (async () => {
+      try { await saveAnalysis(currentUserProfile.userId, analysisResults as any); } catch (e) {
+        console.warn('[backend] saveAnalysis 失败：', e);
+      }
+    })();
+  }, [analysisResults, currentUserProfile?.userId, hasLoadedRemoteData]);
 
   const restoreSelectedInterview = useCallback((userId: string) => {
     const savedSelected = localStorage.getItem(`interreview_selectedInterview_${userId}`);
@@ -218,8 +237,19 @@ export default function App() {
       }
     }
 
+    let savedAnalysis = localStorage.getItem(`interreview_analysis_${userId}`);
+    let analysisPayload: Record<string, AnalysisData> = {};
+    if (savedAnalysis) {
+      try {
+        analysisPayload = JSON.parse(savedAnalysis);
+      } catch {
+        analysisPayload = {};
+      }
+    }
+
     setInterviews(interviewsPayload);
     setInterviewMessages(messagesPayload);
+    setAnalysisResults(analysisPayload);
     restoreSelectedInterview(userId);
   }, [getDefaultInterviews, restoreSelectedInterview]);
 
@@ -227,18 +257,21 @@ export default function App() {
     setHasLoadedRemoteData(false);
     try {
       await registerUser({ ...profile });
-      const [remoteInterviews, remoteMessages] = await Promise.all([
+      const [remoteInterviews, remoteMessages, remoteAnalysis] = await Promise.all([
         fetchInterviews(profile.userId),
         fetchMessages(profile.userId),
+        fetchAnalysis(profile.userId),
       ]);
 
       const finalInterviews = (remoteInterviews && remoteInterviews.length > 0)
         ? remoteInterviews
         : getDefaultInterviews();
       const finalMessages = remoteMessages || {};
+      const finalAnalysis = remoteAnalysis || {};
 
       setInterviews(finalInterviews as any);
       setInterviewMessages(finalMessages as any);
+      setAnalysisResults(finalAnalysis as Record<string, AnalysisData>);
       restoreSelectedInterview(profile.userId);
     } catch (e) {
       console.warn('[backend] 无法连接后端，使用本地数据：', e);
@@ -308,6 +341,12 @@ export default function App() {
     // Remove messages for this interview
     setInterviewMessages(prev => {
       const copy = { ...prev } as Record<string, Message[]>;
+      delete copy[id];
+      return copy;
+    });
+
+    setAnalysisResults(prev => {
+      const copy = { ...prev } as Record<string, AnalysisData>;
       delete copy[id];
       return copy;
     });
@@ -387,7 +426,17 @@ export default function App() {
   };
 
   // Handle start analysis
-  const handleStartAnalysis = () => {
+  const handleStartAnalysis = async () => {
+    if (!selectedInterviewId || !currentUserProfile) {
+      toast.error('请先选择需要分析的面试');
+      return;
+    }
+
+    if (!currentInterview?.transcriptText) {
+      toast.error('暂无转录文本', { description: '请先上传文件并完成转录后再分析' });
+      return;
+    }
+
     // Update interview status to "分析中"
     updateInterview(selectedInterviewId, { status: '分析中' });
     setCurrentStep(3);
@@ -396,27 +445,43 @@ export default function App() {
       description: '预计需要 30-60 秒',
     });
 
-    // Simulate analysis process (10 seconds)
-    setTimeout(() => {
-      // Update interview status to "已完成"
+    try {
+      const analysis = await analyzeInterviewReport(currentUserProfile.userId, selectedInterviewId, {
+        maxPairs: 12,
+      });
+      setAnalysisResults(prev => ({
+        ...prev,
+        [selectedInterviewId]: analysis,
+      }));
       updateInterview(selectedInterviewId, { status: '已完成' });
       setViewMode('report');
-      
-      if (selectedInterviewId) {
+      toast.success('分析完成！', {
+        description: '面试报告已生成',
+      });
+    } catch (error) {
+      console.error('[analysis] 调用失败：', error);
+      const description = error instanceof Error ? error.message : '请稍后重试';
+      updateInterview(selectedInterviewId, { status: '分析失败' });
+      toast.error('分析失败', { description });
+
+      try {
         const mockData = getMockAnalysisData({
           durationSeconds: currentInterview?.durationSeconds,
           durationText: currentInterview?.durationText,
         });
-        setAnalysisResults((prev) => ({
+        setAnalysisResults(prev => ({
           ...prev,
           [selectedInterviewId]: mockData,
         }));
+        updateInterview(selectedInterviewId, { status: '已完成' });
+        setViewMode('report');
+        toast.info('已加载示例分析', {
+          description: 'LLM 服务不可用，已展示示例数据用于演示效果',
+        });
+      } catch (mockError) {
+        console.warn('[analysis] 加载示例数据失败：', mockError);
       }
-      
-      toast.success('分析完成！', {
-        description: '面试报告已生成',
-      });
-    }, 10000); // 10 seconds to match the loader animation
+    }
   };
 
   // Get interview name for header

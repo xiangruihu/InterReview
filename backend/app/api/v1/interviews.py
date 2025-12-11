@@ -8,16 +8,22 @@ from app.models.interview import InterviewData, InterviewCreate, InterviewUpdate
 from app.models.user import UserProfile
 from app.services.storage_service import StorageService
 from app.services.transcription_service import TranscriptionService
+from app.services.llm_service import LLMService
 from app.config import settings
 import uuid
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 storage = StorageService()
 transcriber = TranscriptionService(settings.SILICONFLOW_API_KEY)
+llm_service = LLMService(settings.DASHSCOPE_API_KEY, default_model=settings.DEFAULT_LLM_MODEL)
 logger = logging.getLogger(__name__)
 
 class TranscriptionRequest(BaseModel):
     model: Optional[str] = None
+
+class AnalysisRequest(BaseModel):
+    model: Optional[str] = None
+    max_pairs: Optional[int] = 12
 
 @router.post("/", response_model=dict)
 async def create_interview(user_id: str, interview_data: InterviewCreate):
@@ -225,4 +231,60 @@ async def get_transcription(user_id: str, interview_id: str):
     return {
         "success": True,
         "data": transcript
+    }
+
+@router.post("/{interview_id}/analyze", response_model=dict)
+async def analyze_interview_endpoint(
+    user_id: str,
+    interview_id: str,
+    payload: AnalysisRequest = Body(default=AnalysisRequest())
+):
+    """
+    调用 LLM 对转录文本进行分析
+    """
+    if not settings.DASHSCOPE_API_KEY:
+        raise HTTPException(status_code=500, detail="尚未配置 DASHSCOPE_API_KEY，无法执行分析")
+
+    interviews = storage.get_interviews(user_id)
+    interview = next((i for i in interviews if i.get('id') == interview_id), None)
+
+    if not interview:
+        raise HTTPException(status_code=404, detail="面试不存在")
+
+    transcript_record = storage.get_transcript(user_id, interview_id)
+    transcript_text = (transcript_record or {}).get("text") or interview.get("transcriptText")
+
+    if not transcript_text:
+        raise HTTPException(status_code=400, detail="暂无转录文本，无法进行分析")
+
+    info = {
+        "title": interview.get("title"),
+        "company": interview.get("company"),
+        "position": interview.get("position"),
+        "durationText": interview.get("durationText"),
+    }
+
+    try:
+        analysis_result = await llm_service.analyze_interview(
+            transcript_text,
+            info,
+            model=payload.model,
+            max_pairs=payload.max_pairs or 12
+        )
+    except RuntimeError as llm_error:
+        logger.exception("LLM 分析失败 user=%s interview=%s", user_id, interview_id)
+        raise HTTPException(status_code=500, detail=str(llm_error))
+    except Exception as e:
+        logger.exception("分析面试失败 user=%s interview=%s", user_id, interview_id)
+        raise HTTPException(status_code=500, detail=f"分析面试失败: {str(e)}")
+
+    storage.save_analysis(user_id, interview_id, analysis_result)
+    storage.update_interview(user_id, interview_id, {
+        "status": "已完成",
+        "analysisUpdatedAt": datetime.utcnow().isoformat()
+    })
+
+    return {
+        "success": True,
+        "data": analysis_result
     }

@@ -30,7 +30,7 @@ import { ExportModal } from './ExportModal';
 import { ExportQuestionsModal } from './ExportQuestionsModal';
 import { ExportReportModal } from './ExportReportModal';
 import { formatDuration } from '../utils/time';
-import type { AnalysisData, QAItem } from '../utils/mockAnalysis';
+import type { AnalysisData, QAItem, SuggestionItem } from '../types/analysis';
 
 interface InterviewData {
   id: string;
@@ -140,44 +140,16 @@ interface ChatReportProps {
 
 export function ChatReport({ interviewData, analysisData, onUpdateInterview }: ChatReportProps) {
   const resolvedReportData = analysisData || defaultAnalysisData;
-  const messages = useMemo<Message[]>(() => {
-    const featuredQA = resolvedReportData.qaList?.[2] || resolvedReportData.qaList?.[0];
-    const qaDetailData = featuredQA
-      ? {
-          ...featuredQA,
-          yourAnswer: featuredQA.answer,
-          analysis: featuredQA.notes,
-        }
-      : null;
-
-    return [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-        timestamp: '16:45',
-        type: 'full-report',
-        data: resolvedReportData,
-      },
-      {
-        id: '2',
-        role: 'user',
-        content: '帮我详细分析一下第3个问题的回答',
-        timestamp: '16:47',
-        type: 'text',
-      },
-      qaDetailData
-        ? {
-            id: '3',
-            role: 'assistant',
-            content: '',
-            timestamp: '16:47',
-            type: 'qa-detail',
-            data: qaDetailData,
-          }
-        : null,
-    ].filter(Boolean) as Message[];
-  }, [resolvedReportData]);
+  const messages = useMemo<Message[]>(() => [
+    {
+      id: '1',
+      role: 'assistant',
+      content: '',
+      timestamp: '16:45',
+      type: 'full-report',
+      data: resolvedReportData,
+    },
+  ], [resolvedReportData]);
 
   return (
     <div className="space-y-4">

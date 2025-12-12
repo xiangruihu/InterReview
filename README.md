@@ -189,11 +189,22 @@ npm run dev
 - **Supabase 验证**：运行 `node backend/test_supabase.mjs`，若报错请检查 `.env`、网络和 RLS 策略。
 
 ## Roadmap / 待办
-- 后端异步化：落地 Celery + Redis，避免上传/分析阻塞请求（详见 `BACKEND_IMPLEMENTATION_PLAN.md`）。
-- 真正的分析落地：`LLMService.analyze_interview` 与前端 report/导出打通。
-- 用户认证：接入 Supabase Auth or JWT，替换目前的 “userId 直接传入” 模式。
-- 导出能力：实装 `ExportReportModal`、`ExportQuestionsModal`，生成 PDF/Markdown。
-- 监控与配额：为 DashScope/SiliconFlow 调用增加限流和告警。
+- [ ] 优化交互体验：增强上传/转写/分析进度反馈、错误提示与重试流程，减少用户迷惑。
+- [x] 规划 LangGraph 多 Agent 架构（见下文），为后续智能导向交互做准备。
+- [ ] 后端异步化：落地 Celery + Redis，避免上传/分析阻塞请求（详见 `BACKEND_IMPLEMENTATION_PLAN.md`）。
+- [ ] 真正的分析落地：`LLMService.analyze_interview` 与前端 report/导出打通。
+- [ ] 用户认证：接入 Supabase Auth or JWT，替换目前的 “userId 直接传入” 模式。
+- [ ] 导出能力：实装 `ExportReportModal`、`ExportQuestionsModal`，生成 PDF/Markdown。
+- [ ] 监控与配额：为 DashScope/SiliconFlow 调用增加限流和告警。
+
+## LangGraph 多 Agent 规划（节选）
+详见 [`langgraph.md`](./langgraph.md)，聚焦以下主题：
+
+1. **整体架构**：Planner / Transcription Analyzer / Insight Synthesizer / Action Coach / Conversation Agent 的职责划分、记忆层设计、工具接口。
+2. **Graph 流程**：从入口节点到回执节点的多任务子图，支持上传分析、追问、多轮更新。
+3. **智能策略**：动态 Prompt、意图分类与 Tool Routing、Memory-aware 回复、质量控制与 fallback。
+4. **实施计划**：原型 → 智能增强 → 产品化三阶段路线，明确每一步的目标。
+5. **风险与验收**：API 成本、上下文长度、可靠性、安全隐私等风险及指标（响应时间、合规率、满意度等）。
 
 ## 更多资料
 - `src/CHAT_FEATURE.md`：聊天体验与需求拆解。

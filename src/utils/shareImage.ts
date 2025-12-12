@@ -1,4 +1,5 @@
 interface ShareData {
+  title?: string;
   duration: string;
   rounds: number;
   score: number;
@@ -110,6 +111,7 @@ export async function generateShareImage(data: ShareData): Promise<string> {
   const suggestionList = data.suggestions || [];
   const qaCount = qaList.length;
   const suggestionCount = suggestionList.length;
+  const headingText = (data.title && data.title.trim()) || '面试复盘笔记';
   const estimatedHeight = (() => {
     const qaBlocks = Math.max(qaCount, 1);
     const suggestionBlocks = Math.max(suggestionCount, 1);
@@ -138,7 +140,7 @@ export async function generateShareImage(data: ShareData): Promise<string> {
 
   ctx.fillStyle = '#0f172a';
   ctx.font = headingFont;
-  ctx.fillText('面试复盘笔记', 64, 96);
+  ctx.fillText(headingText, 64, 96);
 
   ctx.font = smallFont;
   ctx.fillStyle = '#475569';

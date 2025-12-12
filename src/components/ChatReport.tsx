@@ -734,7 +734,10 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
       <ExportModal 
         isOpen={showExportModal}
         onClose={() => setShowExportModal(false)}
-        data={reportData}
+        data={{
+          ...reportData,
+          title: interviewData?.title || tempInfo.title
+        }}
       />
       <ExportQuestionsModal 
         isOpen={showExportQuestionsModal}

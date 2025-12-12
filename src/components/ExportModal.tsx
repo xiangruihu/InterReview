@@ -56,6 +56,7 @@ export function ExportModal({ isOpen, onClose, data }: ExportModalProps) {
     try {
       const shareData = getFilteredData();
       const dataUrl = await generateShareImage({
+        title: shareData.title,
         duration: shareData.duration,
         rounds: shareData.rounds,
         score: shareData.score,
@@ -397,6 +398,7 @@ ${s.actions.map((a: string) => `- ${a}`).join('\n')}
 
 const ImagePreview = forwardRef<HTMLDivElement, { data: any }>(({ data }, ref) => {
   const qaList = data.qaList || [];
+  const heading = (data?.title && data.title.trim()) || '面试复盘笔记';
   return (
     <div
       ref={ref}
@@ -408,7 +410,7 @@ const ImagePreview = forwardRef<HTMLDivElement, { data: any }>(({ data }, ref) =
         <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-3">
           <Share2 className="w-8 h-8 text-white" />
         </div>
-        <h1 className="text-2xl text-gray-900">面试复盘笔记</h1>
+        <h1 className="text-2xl text-gray-900">{heading}</h1>
         <p className="text-gray-600">InterReview 面试复盘助手</p>
       </div>
 

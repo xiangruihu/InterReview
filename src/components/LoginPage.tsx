@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { LogIn, Mail, Lock, Eye, EyeOff, User, UserPlus } from 'lucide-react';
+import { toast } from 'sonner@2.0.3';
+import { loginUser, registerAccount, type UserProfileDTO } from '../utils/backend';
 
 interface LoginPageProps {
-  onLogin: (profile: { username: string; email: string }) => void;
+  onLogin: (profile: { userId: string; username: string; email: string; createdAt?: string }) => void;
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
@@ -14,6 +16,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Reset form when switching modes
   const switchMode = (newMode: 'login' | 'register') => {
@@ -24,60 +27,108 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     setConfirmPassword('');
     setShowPassword(false);
     setShowConfirmPassword(false);
+    setFormError(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     
     if (mode === 'login') {
-      // Login validation
       if (!email || !password) {
-        alert('请填写邮箱和密码');
+        toast.error('请填写邮箱和密码');
         return;
       }
 
-      // Mock login process
       setIsLoading(true);
-      setTimeout(() => {
+      try {
+        const profile = await loginUser({ email, password }) as UserProfileDTO;
+        onLogin(profile);
+      } catch (error) {
+        const status = (error as any)?.status;
+        const message =
+          status === 401
+            ? '邮箱或密码错误，请检查后重试'
+            : error instanceof Error
+              ? error.message
+              : '请稍后重试';
+        toast.error('登录失败', { description: message });
+        setFormError(message);
+      } finally {
         setIsLoading(false);
-        // Extract username from email (before @)
-        const usernameGuess = email.split('@')[0] || '用户';
-        onLogin({ username: usernameGuess, email });
-      }, 1000);
+      }
     } else {
-      // Register validation
       if (!username || !email || !password || !confirmPassword) {
-        alert('请填写所有必填项');
+        toast.error('请填写所有必填项');
         return;
       }
 
       if (password !== confirmPassword) {
-        alert('两次输入的密码不一致');
+        toast.error('两次输入的密码不一致');
         return;
       }
 
       if (password.length < 6) {
-        alert('密码长度至少为 6 位');
+        toast.error('密码长度至少为 6 位');
         return;
       }
 
-      // Mock register process
       setIsLoading(true);
-      setTimeout(() => {
+      try {
+        const profile = await registerAccount({ username, email, password }) as UserProfileDTO;
+        toast.success('注册成功，已自动登录');
+        onLogin(profile);
+        setFormError(null);
+      } catch (error) {
+        const status = (error as any)?.status;
+        const message =
+          status === 409
+            ? '该邮箱已注册，请直接使用登录'
+            : error instanceof Error
+              ? error.message
+              : '请稍后重试';
+        toast.error('注册失败', { description: message });
+        setFormError(message);
+      } finally {
         setIsLoading(false);
-        // Auto login after registration
-        onLogin({ username, email });
-      }, 1200);
+      }
     }
   };
 
   // Quick login with demo account
-  const handleQuickLogin = () => {
+  const handleQuickLogin = async () => {
     setIsLoading(true);
-    setTimeout(() => {
+    setFormError(null);
+    const demoEmail = 'demo@example.com';
+    const demoPassword = 'demo123';
+    const fallbackUsername = '演示用户';
+
+    try {
+      let profile: UserProfileDTO | null = null;
+      try {
+        profile = await loginUser({ email: demoEmail, password: demoPassword }) as UserProfileDTO;
+      } catch (error) {
+        const status = (error as any)?.status;
+        if (status === 401 || status === 404) {
+          profile = await registerAccount({
+            username: fallbackUsername,
+            email: demoEmail,
+            password: demoPassword,
+          }) as UserProfileDTO;
+        } else {
+          throw error;
+        }
+      }
+      if (profile) {
+        onLogin(profile);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '请稍后重试';
+      toast.error('快捷登录失败', { description: message });
+      setFormError(message);
+    } finally {
       setIsLoading(false);
-      onLogin({ username: '张同学', email: 'demo@example.com' });
-    }, 800);
+    }
   };
 
   return (
@@ -227,6 +278,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                     </button>
                   </span>
                 </label>
+              </div>
+            )}
+
+            {formError && (
+              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {formError}
               </div>
             )}
 

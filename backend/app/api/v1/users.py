@@ -1,27 +1,65 @@
 from fastapi import APIRouter, HTTPException, Body
 from typing import Optional, List, Dict, Any
-from app.models.user import UserProfile, UserCreate
+from app.models.user import UserProfile, UserRegisterRequest, UserLoginRequest
 from app.services.storage_service import StorageService
 import uuid
 from datetime import datetime
+from passlib.context import CryptContext
 
 router = APIRouter(prefix="/users", tags=["users"])
 storage = StorageService()
+pwd_context = CryptContext(
+    schemes=["pbkdf2_sha256"],
+    deprecated="auto"
+)
+
+def sanitize_user_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    clean = dict(payload)
+    clean.pop("passwordHash", None)
+    return clean
 
 @router.post("/register", response_model=dict)
-async def register_user(user_data: UserCreate):
+async def register_user(user_data: UserRegisterRequest):
     """
     注册用户
     """
     try:
-        user_id = user_data.userId or str(uuid.uuid4())
-        created_at = user_data.createdAt or datetime.utcnow()
+        normalized_email = user_data.email.strip().lower()
+        if not normalized_email:
+            raise HTTPException(status_code=400, detail="邮箱格式不正确")
+
+        existing = storage.find_user_by_email(normalized_email)
+
+        if existing and existing.get("passwordHash"):
+            raise HTTPException(status_code=409, detail="该邮箱已注册，请直接登录")
+
+        def _parse_created_at(value: Any) -> datetime:
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                try:
+                    if value.endswith("Z"):
+                        value = value.replace("Z", "+00:00")
+                    return datetime.fromisoformat(value)
+                except Exception:
+                    return datetime.utcnow()
+            return datetime.utcnow()
+
+        if existing:
+            user_id = existing.get("userId") or str(uuid.uuid4())
+            created_at = _parse_created_at(existing.get("createdAt"))
+        else:
+            user_id = user_data.userId or str(uuid.uuid4())
+            created_at = user_data.createdAt or datetime.utcnow()
+
+        password_hash = pwd_context.hash(user_data.password)
 
         user = UserProfile(
             userId=user_id,
-            username=user_data.username,
-            email=user_data.email,
-            createdAt=created_at
+            username=user_data.username.strip() or "未命名用户",
+            email=normalized_email,
+            createdAt=created_at,
+            passwordHash=password_hash
         )
 
         user_payload = user.model_dump(mode="json")
@@ -29,13 +67,33 @@ async def register_user(user_data: UserCreate):
         if storage.save_user(user_id, user_payload):
             return {
                 "success": True,
-                "data": user_payload
+                "data": sanitize_user_payload(user_payload)
             }
         else:
             raise HTTPException(status_code=500, detail="保存用户数据失败")
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"注册失败: {str(e)}")
+
+@router.post("/login", response_model=dict)
+async def login_user(credentials: UserLoginRequest):
+    """
+    用户登录
+    """
+    normalized_email = credentials.email.strip().lower()
+    user_record = storage.find_user_by_email(normalized_email)
+    if not user_record:
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+
+    password_hash = user_record.get("passwordHash")
+    if not password_hash or not pwd_context.verify(credentials.password, password_hash):
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+
+    return {
+        "success": True,
+        "data": sanitize_user_payload(user_record)
+    }
 
 @router.get("/{user_id}", response_model=dict)
 async def get_user(user_id: str):
@@ -49,7 +107,7 @@ async def get_user(user_id: str):
 
     return {
         "success": True,
-        "data": user_data
+        "data": sanitize_user_payload(user_data)
     }
 
 @router.get("/{user_id}/interviews", response_model=dict)

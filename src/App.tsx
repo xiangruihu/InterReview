@@ -16,26 +16,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
 import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
-import { registerUser, fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport } from './utils/backend';
+import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport } from './utils/backend';
 import { getMockAnalysisData } from './utils/mockAnalysis';
 import type { AnalysisData } from './types/analysis';
 
 // 用户档案模型
 interface UserProfile {
-  userId: string;         // 稳定唯一ID（基于邮箱生成）
+  userId: string;         // 稳定唯一ID，由后端返回
   username: string;
   email: string;
   createdAt: string;
-}
-
-function hashEmailToId(email: string): string {
-  // 简单的 djb2 哈希实现，输出 8 位十六进制
-  let hash = 5381;
-  for (let i = 0; i < email.length; i++) {
-    hash = ((hash << 5) + hash) + email.charCodeAt(i);
-    hash = hash >>> 0;
-  }
-  return 'usr_' + hash.toString(16).padStart(8, '0');
 }
 
 interface InterviewData {
@@ -256,7 +246,6 @@ export default function App() {
   const hydrateFromBackend = useCallback(async (profile: UserProfile) => {
     setHasLoadedRemoteData(false);
     try {
-      await registerUser({ ...profile });
       const [remoteInterviews, remoteMessages, remoteAnalysis] = await Promise.all([
         fetchInterviews(profile.userId),
         fetchMessages(profile.userId),
@@ -490,13 +479,12 @@ export default function App() {
   };
 
   // Handle login - 保存用户档案并加载该用户的历史数据
-  const handleLogin = async (profileInput: { username: string; email: string }) => {
-    const userId = hashEmailToId(profileInput.email || profileInput.username);
+  const handleLogin = async (profileInput: { userId: string; username: string; email: string; createdAt?: string }) => {
     const profile: UserProfile = {
-      userId,
+      userId: profileInput.userId,
       username: profileInput.username,
       email: profileInput.email,
-      createdAt: new Date().toISOString(),
+      createdAt: profileInput.createdAt || new Date().toISOString(),
     };
 
     setCurrentUserProfile(profile);

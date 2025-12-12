@@ -75,6 +75,7 @@ pip install -r requirements.txt
 | `REDIS_URL` | Celery/任务队列配置 | 当前未使用，预留。 |
 | `SECRET_KEY` | JWT/Session 用，默认占位 | 部署务必修改。 |
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` | Supabase 连接参数 | `backend/test_supabase.mjs` 会读取验证。 |
+| `PASSLIB_SCHEME`（可选） | 控制密码哈希方案 | 默认 `pbkdf2_sha256`，如需自定义可在后端统一配置。 |
 
 > Key 申请入口：
 > - DashScope：https://dashscope.console.aliyun.com/apiKey

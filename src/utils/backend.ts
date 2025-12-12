@@ -5,11 +5,45 @@ import type { AnalysisData } from '../types/analysis';
 
 export const BACKEND_BASE = (import.meta.env.VITE_BACKEND_URL as string) || 'http://localhost:8000';
 
+type JsonMap = Record<string, any>;
+
+async function parseResponse(resp: Response): Promise<JsonMap> {
+  const text = await resp.text();
+  let data: JsonMap = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+  }
+
+  if (!resp.ok) {
+    const message = data?.detail || data?.message || data?.error || resp.statusText || '请求失败';
+    const error = new Error(typeof message === 'string' ? message : '请求失败');
+    (error as any).status = resp.status;
+    throw error;
+  }
+
+  return data;
+}
+
 export interface UserProfileDTO {
   userId: string;
   username: string;
   email: string;
   createdAt?: string;
+}
+
+export interface RegisterPayload {
+  username: string;
+  email: string;
+  password: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
 }
 
 export type InterviewStatus = '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
@@ -37,16 +71,24 @@ export interface MessageDTO {
 }
 
 // 注册用户：在服务端创建/更新用户记录
-export async function registerUser(profile: UserProfileDTO): Promise<void> {
+export async function registerAccount(payload: RegisterPayload): Promise<UserProfileDTO> {
   const resp = await fetch(`${BACKEND_BASE}/users/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(profile),
+    body: JSON.stringify(payload),
   });
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`registerUser failed: ${resp.status} ${text}`);
-  }
+  const data = await parseResponse(resp);
+  return data?.data as UserProfileDTO;
+}
+
+export async function loginUser(payload: LoginPayload): Promise<UserProfileDTO> {
+  const resp = await fetch(`${BACKEND_BASE}/users/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await parseResponse(resp);
+  return data?.data as UserProfileDTO;
 }
 
 // 读取/保存 面试列表

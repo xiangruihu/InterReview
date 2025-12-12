@@ -43,6 +43,31 @@ class StorageService:
             print(f"读取用户数据失败: {e}")
             return None
 
+    def find_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """通过邮箱查找用户"""
+        try:
+            normalized = (email or "").strip().lower()
+            if not normalized or not self.data_dir.exists():
+                return None
+
+            for user_dir in self.data_dir.iterdir():
+                if not user_dir.is_dir():
+                    continue
+                file_path = user_dir / "user.json"
+                if not file_path.exists():
+                    continue
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                stored_email = (data.get("email") or "").strip().lower()
+                if stored_email == normalized:
+                    data["passwordHash"] = data.get("passwordHash", "")
+                    return data
+        except Exception as e:
+            print(f"通过邮箱查找用户失败: {e}")
+            return None
+
+        return None
+
     def save_interviews(self, user_id: str, interviews: List[Dict[str, Any]]) -> bool:
         """保存面试列表"""
         try:

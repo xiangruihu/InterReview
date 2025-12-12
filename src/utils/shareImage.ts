@@ -106,8 +106,10 @@ const formatDurationLabel = (value: string | number | undefined): string => {
 
 export async function generateShareImage(data: ShareData): Promise<string> {
   const width = 1080;
-  const qaCount = data.qaList?.length ?? 0;
-  const suggestionCount = data.suggestions?.length ?? 0;
+  const qaList = data.qaList || [];
+  const suggestionList = data.suggestions || [];
+  const qaCount = qaList.length;
+  const suggestionCount = suggestionList.length;
   const estimatedHeight = (() => {
     const qaBlocks = Math.max(qaCount, 1);
     const suggestionBlocks = Math.max(suggestionCount, 1);
@@ -145,7 +147,7 @@ export async function generateShareImage(data: ShareData): Promise<string> {
   const statTitles = ['面试时长', '问答轮次', '综合评分', '通过概率'];
   const statValues = [
     formatDurationLabel(data.duration),
-    `${data.rounds || 0}`,
+    `${qaCount}`,
     `${data.score || 0}`,
     `${data.passRate || 0}%`,
   ];
@@ -172,13 +174,13 @@ export async function generateShareImage(data: ShareData): Promise<string> {
 
   ctx.font = '600 30px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.fillStyle = '#0f172a';
-  ctx.fillText(`🔥 精选问答（共 ${data.qaList.length} 个）`, 64, currentY);
+  ctx.fillText(`🔥 精选问答（共 ${qaCount} 个）`, 64, currentY);
   currentY += 36;
 
   ctx.font = textFont;
   ctx.fillStyle = '#0f172a';
 
-  data.qaList.forEach((qa, idx) => {
+  qaList.forEach((qa, idx) => {
     const blockY = currentY + 24;
     drawRoundedRect(ctx, 64, blockY, sectionWidth, 102, 18, 'rgba(255,255,255,0.95)');
 
@@ -212,7 +214,7 @@ export async function generateShareImage(data: ShareData): Promise<string> {
   ctx.fillText('💡 核心改进建议', 64, currentY);
   currentY += 36;
 
-  data.suggestions.forEach((suggestion) => {
+  suggestionList.forEach((suggestion) => {
     drawRoundedRect(ctx, 64, currentY, sectionWidth, 70, 18, 'rgba(255,255,255,0.95)');
     ctx.font = textFont;
     ctx.fillStyle = '#0f172a';

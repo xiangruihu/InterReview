@@ -211,7 +211,7 @@ def extract_qa_pairs_parallel(
     transcript_path: Path,
     *,
     model: str = "qwen3-max",
-    max_pairs: int = 12,
+    max_pairs: int = 100,
     temperature: float = 0.2,
     variants: int = 3,
 ) -> List[Dict[str, Any]]:
@@ -228,7 +228,7 @@ def extract_qa_pairs(
     transcript_path: Path,
     *,
     model: str = "qwen3-max",
-    max_pairs: int = 12,
+    max_pairs: int = 100,
     temperature: float = 0.2,
 ) -> Dict[str, Any]:
     client = create_client()
@@ -314,7 +314,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-pairs",
         type=int,
-        default=12,
+        default=100,
         help="最多抽取的问答对数量",
     )
     parser.add_argument(

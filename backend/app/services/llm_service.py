@@ -4,6 +4,8 @@ import json
 import os
 from datetime import datetime
 
+from app.services.llm_processor import LLMProcessor
+
 class LLMService:
     """LLM 服务 - 使用阿里云 DashScope"""
 
@@ -25,7 +27,7 @@ class LLMService:
         interview_info: Dict,
         *,
         model: Optional[str] = None,
-        max_pairs: int = 12
+        max_pairs: int = 100
     ) -> Dict[str, Any]:
         """
         分析面试文本并生成结构化报告
@@ -37,86 +39,54 @@ class LLMService:
         Returns:
             结构化分析报告
         """
-        prompt = f"""
-你是一名专业的面试复盘助手。请阅读下面的转录稿，并提取不超过 {max_pairs} 组高质量的问答对，并总结候选人的表现。
-
-面试信息：
-- 面试名称：{interview_info.get('title', '未知')}
-- 公司名称：{interview_info.get('company', '未知')}
-- 岗位：{interview_info.get('position', '未知')}
-
-要求：
-1. 合并同一问题的追问，抽象出核心问题。
-2. 在答案中概括候选人的主要观点，不要逐字照搬。
-3. 尽量保留原文中的时间戳（如“07:03”），若答案跨多个时间段可以写成范围。
-4. 输出 JSON，包含问答、表现亮点、需要改进的地方、快速总结及改进建议。
-   - strengths.title / improvements.title ≤ 12 个中文字符，detail ≤ 40 字。
-   - quick_summary ≤ 60 字。
-   - suggestions 中：title ≤ 15 字，description ≤ 40 字，priority 仅可取 "高优先级"/"中优先级"/"低优先级"，actions 为 3-4 条具体行动。
-
-JSON 模板：
-{{
-  "duration": "面试时长，若无法推断可为空字符串",
-  "rounds": 问答轮次数,
-  "score": 综合评分(0-100),
-  "passRate": 通过概率(0-100),
-  "qa_pairs": [
-    {{
-      "id": 1,
-      "questioner": "说话人 2",
-      "question_time": "06:41",
-      "question": "用一句话复述问题",
-      "answerer": "说话人 1",
-      "answer_time": "07:03-07:53",
-      "answer": "概括回答要点",
-      "notes": "可选，补充如回答薄弱点或评价",
-      "score": 评分0-100,
-      "category": "问题分类"
-    }}
-  ],
-  "strengths": [
-    {{"title": "技术深度扎实", "detail": "示例：能深入阐述 React 生态"}}
-  ],
-  "improvements": [
-    {{"title": "回答缺少量化", "detail": "示例：缺少具体数字支撑"}}
-  ],
-  "quick_summary": "一句话总结本次面试表现",
-  "suggestions": [
-    {{
-      "title": "深入了解目标公司",
-      "description": "面试前至少花 2 小时研究公司",
-      "priority": "高优先级",
-      "actions": [
-        "阅读公司官网/产品介绍/技术博客",
-        "搜索最近 3 个月的新闻动态",
-        "在社区了解公司文化与面试经验",
-        "准备 2-3 个与公司相关的问题"
-      ]
-    }}
-  ]
-}}
-
-转录内容：
-{interview_text}
-"""
+        processor = LLMProcessor(self.client, model or self.default_model)
 
         try:
-            response = self.client.chat.completions.create(
-                model=model or self.default_model,
-                messages=[
-                    {"role": "system", "content": "你是一个专业的面试复盘助手，请输出合法的JSON格式。"},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                response_format={"type": "json_object"}
+            qa_payload = processor.extract_qa_pairs(
+                interview_text,
+                interview_info,
+                max_pairs=max_pairs,
             )
-
-            content = response.choices[0].message.content
-            raw = json.loads(content)
-            return self._normalize_result(raw, interview_info, max_pairs)
-
         except Exception as e:
-            raise RuntimeError(f"LLM 分析失败: {e}") from e
+            raise RuntimeError(f"问答抽取失败: {e}") from e
+
+        qa_pairs = qa_payload.get("qa_pairs") or []
+
+        try:
+            performance_payload = processor.summarize_performance(
+                interview_text,
+                interview_info,
+                qa_pairs=qa_pairs,
+            )
+        except Exception as e:
+            raise RuntimeError(f"表现总结失败: {e}") from e
+
+        strengths = performance_payload.get("strengths") or []
+        improvements = performance_payload.get("improvements") or []
+
+        try:
+            suggestion_payload = processor.generate_suggestions(
+                interview_text,
+                interview_info,
+                strengths=strengths,
+                improvements=improvements,
+            )
+        except Exception as e:
+            raise RuntimeError(f"改进建议生成失败: {e}") from e
+
+        raw = {
+            "duration": qa_payload.get("duration"),
+            "rounds": qa_payload.get("rounds"),
+            "qa_pairs": qa_pairs,
+            "score": performance_payload.get("score"),
+            "passRate": performance_payload.get("passRate"),
+            "strengths": strengths,
+            "improvements": improvements,
+            "quick_summary": performance_payload.get("quick_summary"),
+            "suggestions": suggestion_payload.get("suggestions"),
+        }
+
+        return self._normalize_result(raw, interview_info, max_pairs)
 
     def _normalize_result(
         self,
@@ -181,9 +151,9 @@ JSON 模板：
             })
 
         duration = raw.get("duration") or interview_info.get("durationText") or ""
-        rounds = raw.get("rounds")
+        rounds = len(qa_list) if qa_list else raw.get("rounds")
         if not isinstance(rounds, int):
-            rounds = len(qa_list)
+            rounds = 0
 
         score = _clamp(raw.get("score"), 45, 95, 72)
         pass_rate = _clamp(raw.get("passRate"), 30, 98, 65)

@@ -241,8 +241,12 @@ function AssistantMessage({ message, interviewData, onUpdateInterview }: { messa
 }
 
 function ReportSummaryContent({ data }: { data: any }) {
-  const strengths = data?.strengths || [];
-  const weaknesses = data?.weaknesses || [];
+  const safeData = data || {};
+  const strengths = safeData.strengths || [];
+  const weaknesses = safeData.weaknesses || [];
+  const rounds = Array.isArray(safeData.qaList)
+    ? safeData.qaList.length
+    : safeData.rounds || 0;
 
   return (
     <div className="space-y-5">
@@ -260,28 +264,28 @@ function ReportSummaryContent({ data }: { data: any }) {
             <Clock className="w-3.5 h-3.5" />
             <span className="text-xs">面试时长</span>
           </div>
-          <div className="text-gray-900 text-sm">{data.duration}</div>
+          <div className="text-gray-900 text-sm">{safeData.duration}</div>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 text-gray-600 mb-1">
             <MessageSquare className="w-3.5 h-3.5" />
             <span className="text-xs">问答轮次</span>
           </div>
-          <div className="text-gray-900 text-sm">{data.rounds} 轮</div>
+          <div className="text-gray-900 text-sm">{rounds} 轮</div>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 text-gray-600 mb-1">
             <Target className="w-3.5 h-3.5" />
             <span className="text-xs">综合评分</span>
           </div>
-          <div className="text-blue-600 text-sm">{data.score} / 100</div>
+          <div className="text-blue-600 text-sm">{safeData.score} / 100</div>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 text-gray-600 mb-1">
             <TrendingUp className="w-3.5 h-3.5" />
             <span className="text-xs">通过概率</span>
           </div>
-          <div className="text-green-600 text-sm">{data.passRate}%</div>
+          <div className="text-green-600 text-sm">{safeData.passRate}%</div>
         </div>
       </div>
 
@@ -327,11 +331,11 @@ function ReportSummaryContent({ data }: { data: any }) {
         </div>
       </div>
 
-      {data.quickSummary && (
+      {safeData.quickSummary && (
         <div className="bg-blue-50 border border-blue-100 rounded-lg p-4">
           <h5 className="text-gray-900 text-sm mb-2">💡 快速总结</h5>
           <p className="text-sm text-gray-700 leading-relaxed">
-            {data.quickSummary}
+            {safeData.quickSummary}
           </p>
         </div>
       )}
@@ -534,8 +538,17 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
     { id: 'analysis' as const, label: '数据分析', icon: BarChart3 },
     { id: 'suggestions' as const, label: '改进建议', icon: Lightbulb }
   ];
-  const resolvedDurationText = interviewData?.durationText || formatDuration(interviewData?.durationSeconds) || data?.duration;
-  const reportData = resolvedDurationText ? { ...data, duration: resolvedDurationText } : data;
+  const resolvedDurationText =
+    interviewData?.durationText ||
+    formatDuration(interviewData?.durationSeconds) ||
+    data?.duration;
+  const baseReportData = resolvedDurationText
+    ? { ...(data || {}), duration: resolvedDurationText }
+    : (data || {});
+  const normalizedRounds = Array.isArray(baseReportData.qaList)
+    ? baseReportData.qaList.length
+    : baseReportData.rounds || 0;
+  const reportData = { ...baseReportData, rounds: normalizedRounds };
   const overviewData = { ...reportData };
 
   return (
@@ -738,6 +751,10 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
 }
 
 function OverviewTab({ data }: { data: any }) {
+  const safeData = data || {};
+  const rounds = Array.isArray(safeData.qaList)
+    ? safeData.qaList.length
+    : safeData.rounds || 0;
   return (
     <div className="space-y-4">
       {/* Stats Grid */}
@@ -747,28 +764,28 @@ function OverviewTab({ data }: { data: any }) {
             <Clock className="w-3.5 h-3.5" />
             <span className="text-xs">面试时长</span>
           </div>
-          <div className="text-gray-900 text-sm">{data.duration}</div>
+          <div className="text-gray-900 text-sm">{safeData.duration}</div>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 text-gray-600 mb-1">
             <MessageSquare className="w-3.5 h-3.5" />
             <span className="text-xs">问答轮次</span>
           </div>
-          <div className="text-gray-900 text-sm">{data.rounds} 轮</div>
+          <div className="text-gray-900 text-sm">{rounds} 轮</div>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 text-gray-600 mb-1">
             <Target className="w-3.5 h-3.5" />
             <span className="text-xs">综合评分</span>
           </div>
-          <div className="text-blue-600 text-sm">{data.score} / 100</div>
+          <div className="text-blue-600 text-sm">{safeData.score} / 100</div>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 text-gray-600 mb-1">
             <TrendingUp className="w-3.5 h-3.5" />
             <span className="text-xs">通过概率</span>
           </div>
-          <div className="text-green-600 text-sm">{data.passRate}%</div>
+          <div className="text-green-600 text-sm">{safeData.passRate}%</div>
         </div>
       </div>
 
@@ -782,7 +799,7 @@ function OverviewTab({ data }: { data: any }) {
             <h4 className="text-gray-900 text-sm">表现优秀的方面</h4>
           </div>
           <div className="space-y-2">
-            {data.strengths.map((item: any, index: number) => (
+            {(safeData.strengths || []).map((item: any, index: number) => (
               <div key={index} className="flex items-start gap-2 text-sm">
                 <span className="text-green-600 mt-0.5">•</span>
                 <div>
@@ -802,7 +819,7 @@ function OverviewTab({ data }: { data: any }) {
             <h4 className="text-gray-900 text-sm">需要改进的地方</h4>
           </div>
           <div className="space-y-2">
-            {data.weaknesses.map((item: any, index: number) => (
+            {(safeData.weaknesses || []).map((item: any, index: number) => (
               <div key={index} className="flex items-start gap-2 text-sm">
                 <span className="text-orange-600 mt-0.5">•</span>
                 <div>
@@ -819,7 +836,7 @@ function OverviewTab({ data }: { data: any }) {
       <div className="bg-blue-50 border border-blue-100 rounded-lg p-4">
         <h5 className="text-gray-900 text-sm mb-2">💡 快速总结</h5>
         <p className="text-sm text-gray-700 leading-relaxed">
-          {data.quickSummary || '你的技术能力整体不错，但仍有一些需要改进的地方。'}
+          {safeData.quickSummary || '你的技术能力整体不错，但仍有一些需要改进的地方。'}
         </p>
       </div>
     </div>

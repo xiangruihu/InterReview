@@ -23,7 +23,7 @@ class TranscriptionRequest(BaseModel):
 
 class AnalysisRequest(BaseModel):
     model: Optional[str] = None
-    max_pairs: Optional[int] = 12
+    max_pairs: Optional[int] = 100
 
 @router.post("/", response_model=dict)
 async def create_interview(user_id: str, interview_data: InterviewCreate):
@@ -269,7 +269,7 @@ async def analyze_interview_endpoint(
             transcript_text,
             info,
             model=payload.model,
-            max_pairs=payload.max_pairs or 12
+            max_pairs=payload.max_pairs or 100
         )
     except RuntimeError as llm_error:
         logger.exception("LLM 分析失败 user=%s interview=%s", user_id, interview_id)

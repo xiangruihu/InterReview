@@ -16,6 +16,29 @@ export interface StagedProgressController {
   reset: () => void;
 }
 
+export function computeStagedProgressValue(
+  elapsedMs: number,
+  config?: UseStagedProgressConfig
+): number {
+  const {
+    fastDuration = 30,
+    fastTarget = 50,
+    slowSpan = 40,
+    slowSpeed = 0.08,
+    maxWhileRunning = 90,
+  } = config || {};
+
+  if (elapsedMs <= 0) return 0;
+  const elapsedSeconds = elapsedMs / 1000;
+  if (elapsedSeconds <= fastDuration) {
+    const ratio = elapsedSeconds / fastDuration;
+    return Math.min(fastTarget, ratio * fastTarget);
+  }
+  const slowElapsed = elapsedSeconds - fastDuration;
+  const slowProgress = slowSpan * (1 - Math.exp(-slowSpeed * slowElapsed));
+  return Math.min(maxWhileRunning, fastTarget + slowProgress);
+}
+
 export function useStagedProgress(config?: UseStagedProgressConfig): StagedProgressController {
   const {
     fastDuration = 30,
@@ -44,16 +67,14 @@ export function useStagedProgress(config?: UseStagedProgressConfig): StagedProgr
   }, []);
 
   const computeRunningValue = useCallback(
-    (elapsedMs: number) => {
-      const elapsedSeconds = elapsedMs / 1000;
-      if (elapsedSeconds <= fastDuration) {
-        const ratio = elapsedSeconds / fastDuration;
-        return Math.min(fastTarget, ratio * fastTarget);
-      }
-      const slowElapsed = elapsedSeconds - fastDuration;
-      const slowProgress = slowSpan * (1 - Math.exp(-slowSpeed * slowElapsed));
-      return Math.min(maxWhileRunning, fastTarget + slowProgress);
-    },
+    (elapsedMs: number) =>
+      computeStagedProgressValue(elapsedMs, {
+        fastDuration,
+        fastTarget,
+        slowSpan,
+        slowSpeed,
+        maxWhileRunning,
+      }),
     [fastDuration, fastTarget, slowSpan, slowSpeed, maxWhileRunning]
   );
 
@@ -124,4 +145,3 @@ export function useStagedProgress(config?: UseStagedProgressConfig): StagedProgr
     reset,
   };
 }
-

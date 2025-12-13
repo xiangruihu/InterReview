@@ -11,8 +11,10 @@ import {
 import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner@2.0.3';
 import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../utils/backend';
-import { useStagedProgress } from '../hooks/useStagedProgress';
 import { formatDuration } from '../utils/time';
+import type { UploadTaskState } from '../types/uploads';
+import { computeTaskProgress, shouldAnimateTaskProgress } from '../utils/stagedTaskProgress';
+import { DEFAULT_UPLOAD_COMPLETION_DURATION, DEFAULT_UPLOAD_PROGRESS_CONFIG } from '../constants/progress';
 
 const MEDIA_DURATION_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.mp4'];
 const TEXT_EXTENSIONS = ['.txt'];
@@ -89,12 +91,13 @@ interface UploadAreaProps {
   interviewStatus?: string;
   interviewFileUrl?: string;
   initialTranscript?: string;
-  onUploadComplete?: (info: { fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => void;
+  uploadTask?: UploadTaskState;
+  onUploadStart?: (info: { interviewId: string; fileName: string }) => void;
+  onUploadError?: (info: { interviewId: string; error?: string }) => void;
+  onUploadComplete?: (info: { interviewId: string; fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => void;
   onStartAnalysis?: () => void;
   onTranscriptUpdate?: (text: string) => void;
 }
-
-type UploadStage = 'idle' | 'uploading';
 
 export function UploadArea({
   userId,
@@ -103,26 +106,63 @@ export function UploadArea({
   interviewStatus,
   interviewFileUrl,
   initialTranscript,
+  uploadTask,
+  onUploadStart,
+  onUploadError,
   onUploadComplete,
   onStartAnalysis,
   onTranscriptUpdate,
 }: UploadAreaProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const {
-    progress: uploadProgress,
-    start: startUploadProgress,
-    complete: completeUploadProgress,
-    reset: resetUploadProgress,
-  } = useStagedProgress();
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
   const [transcript, setTranscript] = useState(initialTranscript || '');
   const [transcriptUpdatedAt, setTranscriptUpdatedAt] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const [displayProgress, setDisplayProgress] = useState(() =>
+    computeTaskProgress(uploadTask, {
+      config: DEFAULT_UPLOAD_PROGRESS_CONFIG,
+      completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
+    })
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!uploadTask) {
+      setDisplayProgress(0);
+      return;
+    }
+
+    let raf: number | null = null;
+    let cancelled = false;
+
+    const update = () => {
+      if (cancelled) return;
+      setDisplayProgress(
+        computeTaskProgress(uploadTask, {
+          config: DEFAULT_UPLOAD_PROGRESS_CONFIG,
+          completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
+        })
+      );
+      if (
+        shouldAnimateTaskProgress(uploadTask, {
+          completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
+        })
+      ) {
+        raf = window.requestAnimationFrame(update);
+      }
+    };
+
+    update();
+
+    return () => {
+      cancelled = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+    };
+  }, [uploadTask]);
 
   // Supported file types
   const supportedTypes = [
@@ -168,22 +208,28 @@ export function UploadArea({
       return;
     }
 
+    const targetInterviewId = interviewId;
+
+    if (uploadTask?.status === 'running') {
+      toast.info('当前文件仍在上传，请稍候完成后再试');
+      return;
+    }
+
     try {
-      setIsUploading(true);
-      setUploadStage('uploading');
-      startUploadProgress();
+      onUploadStart?.({ interviewId: targetInterviewId, fileName: file.name });
       const isTextFile = isTextTranscriptFile(file);
       const durationPromise = getMediaDuration(file);
       const [result, durationSeconds] = await Promise.all([
-        uploadInterviewFile(userId, interviewId, file),
+        uploadInterviewFile(userId, targetInterviewId, file),
         durationPromise,
       ]);
       const durationText = formatDuration(durationSeconds ?? undefined);
-      await completeUploadProgress();
-      setUploadStage('idle');
-      setUploadedFile(file);
+      if (interviewId === targetInterviewId) {
+        setUploadedFile(file);
+      }
       toast.success(`「${file.name}」上传成功`);
       onUploadComplete?.({
+        interviewId: targetInterviewId,
         fileName: file.name,
         filePath: result.file_path,
         fileType: result.file_type || file.type,
@@ -201,20 +247,14 @@ export function UploadArea({
         } catch (readError) {
           const message = readError instanceof Error ? readError.message : '读取文本失败';
           toast.error('导入文本失败', { description: message });
-        } finally {
-          setUploadStage('idle');
         }
       } else {
         toast.info('上传完成，点击“重新转写”即可生成文字稿');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '上传失败，请稍后重试';
+      onUploadError?.({ interviewId: targetInterviewId, error: message });
       toast.error('上传失败', { description: message });
-      setUploadStage('idle');
-      resetUploadProgress();
-    } finally {
-      setUploadStage('idle');
-      setIsUploading(false);
     }
   };
 
@@ -352,18 +392,16 @@ export function UploadArea({
     (interviewFileUrl ? interviewFileUrl.split('/').pop() || '已上传的文件' : null);
 
   const hasUploaded = Boolean(uploadedFile || interviewFileUrl);
+  const isUploadInProgress = uploadTask?.status === 'running';
+  const shouldShowProgressBar =
+    !!uploadTask &&
+    ((uploadTask.status === 'running') ||
+      (uploadTask.status === 'success' && displayProgress < 100));
+  const progressLabel = Math.min(100, Math.max(0, Math.round(displayProgress)));
 
   useEffect(() => {
     setUploadedFile(null);
-    setUploadStage('idle');
-    resetUploadProgress();
   }, [userId, interviewId]);
-
-  useEffect(() => {
-    return () => {
-      resetUploadProgress();
-    };
-  }, [resetUploadProgress]);
 
   return (
     <div className="space-y-6">
@@ -372,7 +410,7 @@ export function UploadArea({
         className={`bg-white border-2 border-dashed rounded-xl px-8 py-12 transition-all ${
           isDragging
             ? 'border-blue-500 bg-blue-50'
-            : uploadedFile
+            : hasUploaded
             ? 'border-green-400 bg-green-50'
             : 'border-gray-300 hover:border-blue-400'
         }`}
@@ -418,7 +456,7 @@ export function UploadArea({
             </div>
 
             {/* Upload Button */}
-            {!isUploading && (
+            {!isUploadInProgress && (
               <div className="pt-2">
                 <button
                   onClick={handleUploadClick}
@@ -474,9 +512,9 @@ export function UploadArea({
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
                 onClick={handleUploadClick}
-                disabled={uploadStage !== 'idle'}
+                disabled={isUploadInProgress}
                 className={`px-5 py-2.5 border rounded-lg transition-colors ${
-                  uploadStage !== 'idle'
+                  isUploadInProgress
                     ? 'border-gray-200 text-gray-400 cursor-not-allowed'
                     : 'border-gray-300 text-gray-700 hover:bg-gray-50'
                 }`}
@@ -485,7 +523,12 @@ export function UploadArea({
               </button>
               <button
                 onClick={handleStartAnalysis}
-                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2"
+                disabled={isUploadInProgress}
+                className={`px-6 py-2.5 rounded-lg transition-colors flex items-center gap-2 ${
+                  isUploadInProgress
+                    ? 'bg-blue-300 text-white cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
               >
                 <Sparkles className="w-4 h-4" />
                 开始分析
@@ -493,16 +536,16 @@ export function UploadArea({
             </div>
           </div>
         )}
-        {uploadStage === 'uploading' && (
+        {shouldShowProgressBar && (
           <div className="pt-4 max-w-md mx-auto">
             <div className="flex items-center justify-between text-sm mb-2">
               <span className="text-gray-600">上传中...</span>
-              <span className="text-blue-600">{Math.round(uploadProgress)}%</span>
+              <span className="text-blue-600">{progressLabel}%</span>
             </div>
             <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
               <div
                 className="h-full bg-blue-600 transition-all duration-300"
-                style={{ width: `${uploadProgress}%` }}
+                style={{ width: `${Math.min(100, Math.max(0, displayProgress))}%` }}
               ></div>
             </div>
           </div>

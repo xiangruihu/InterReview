@@ -19,6 +19,14 @@ import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
 import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport, transcribeInterview } from './utils/backend';
 import { getMockAnalysisData } from './utils/mockAnalysis';
 import type { AnalysisData } from './types/analysis';
+import type { UploadTaskState, AnalysisTaskState } from './types/uploads';
+import { computeStagedProgressValue } from './hooks/useStagedProgress';
+import {
+  DEFAULT_UPLOAD_COMPLETION_DURATION,
+  DEFAULT_UPLOAD_PROGRESS_CONFIG,
+  DEFAULT_ANALYSIS_PROGRESS_CONFIG,
+  DEFAULT_ANALYSIS_COMPLETION_DURATION,
+} from './constants/progress';
 
 // 用户档案模型
 interface UserProfile {
@@ -114,6 +122,8 @@ export default function App() {
   // Chat messages state - separate messages for each interview
   const [interviewMessages, setInterviewMessages] = useState<Record<string, Message[]>>({});
   const [analysisResults, setAnalysisResults] = useState<Record<string, AnalysisData>>({});
+  const [uploadTasks, setUploadTasks] = useState<Record<string, UploadTaskState>>({});
+  const [analysisTasks, setAnalysisTasks] = useState<Record<string, AnalysisTaskState>>({});
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
   const [isAITyping, setIsAITyping] = useState(false);
   
@@ -122,7 +132,6 @@ export default function App() {
 
   // Get current interview
   const currentInterview = interviews.find(i => i.id === selectedInterviewId);
-  const [analysisCompletionSignal, setAnalysisCompletionSignal] = useState(0);
   const [analysisCompletionTargetId, setAnalysisCompletionTargetId] = useState<string | null>(null);
   const selectedInterviewIdRef = useRef(selectedInterviewId);
 
@@ -137,6 +146,119 @@ export default function App() {
     );
   }, []);
 
+  const beginUploadTask = useCallback((info: { interviewId: string; fileName: string }) => {
+    if (!info.interviewId) return;
+    setUploadTasks((prev) => ({
+      ...prev,
+      [info.interviewId]: {
+        status: 'running',
+        fileName: info.fileName,
+        startedAt: Date.now(),
+      },
+    }));
+  }, []);
+
+  const completeUploadTaskState = useCallback((interviewId: string) => {
+    if (!interviewId) return;
+    setUploadTasks((prev) => {
+      const prevTask = prev[interviewId];
+      const startedAt = prevTask?.startedAt ?? Date.now();
+      const completedAt = Date.now();
+      const baseProgress = Math.min(
+        computeStagedProgressValue(completedAt - startedAt, DEFAULT_UPLOAD_PROGRESS_CONFIG),
+        DEFAULT_UPLOAD_PROGRESS_CONFIG.maxWhileRunning ?? 90
+      );
+      return {
+        ...prev,
+        [interviewId]: {
+          ...prevTask,
+          status: 'success',
+          startedAt,
+          completedAt,
+          progressAtCompletion: baseProgress,
+          completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
+        },
+      };
+    });
+  }, []);
+
+  const failUploadTask = useCallback((info: { interviewId: string; error?: string }) => {
+    if (!info.interviewId) return;
+    setUploadTasks((prev) => ({
+      ...prev,
+      [info.interviewId]: {
+        ...prev[info.interviewId],
+        status: 'error',
+        error: info.error,
+      },
+    }));
+  }, []);
+
+  const clearUploadTask = useCallback((interviewId: string) => {
+    if (!interviewId) return;
+    setUploadTasks((prev) => {
+      const next = { ...prev };
+      delete next[interviewId];
+      return next;
+    });
+  }, []);
+
+  const beginAnalysisTask = useCallback((interviewId: string) => {
+    if (!interviewId) return;
+    setAnalysisTasks((prev) => ({
+      ...prev,
+      [interviewId]: {
+        status: 'running',
+        startedAt: Date.now(),
+      },
+    }));
+  }, []);
+
+  const completeAnalysisTask = useCallback((interviewId: string) => {
+    if (!interviewId) return;
+    setAnalysisTasks((prev) => {
+      const prevTask = prev[interviewId];
+      const startedAt = prevTask?.startedAt ?? Date.now();
+      const completedAt = Date.now();
+      const baseProgress = Math.min(
+        computeStagedProgressValue(completedAt - startedAt, DEFAULT_ANALYSIS_PROGRESS_CONFIG),
+        DEFAULT_ANALYSIS_PROGRESS_CONFIG.maxWhileRunning ?? 90
+      );
+      return {
+        ...prev,
+        [interviewId]: {
+          ...prevTask,
+          status: 'success',
+          startedAt,
+          completedAt,
+          progressAtCompletion: baseProgress,
+          completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
+        },
+      };
+    });
+  }, []);
+
+  const failAnalysisTask = useCallback((interviewId: string, error?: string) => {
+    if (!interviewId) return;
+    setAnalysisTasks((prev) => ({
+      ...prev,
+      [interviewId]: {
+        ...prev[interviewId],
+        status: 'error',
+        error,
+      },
+    }));
+  }, []);
+
+  const clearAnalysisTask = useCallback((interviewId: string) => {
+    if (!interviewId) return;
+    setAnalysisTasks((prev) => {
+      const next = { ...prev };
+      delete next[interviewId];
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     selectedInterviewIdRef.current = selectedInterviewId;
   }, [selectedInterviewId]);
@@ -145,8 +267,9 @@ export default function App() {
     if (!analysisCompletionTargetId) return;
     if (currentInterview?.id === analysisCompletionTargetId) return;
     updateInterview(analysisCompletionTargetId, { status: '已完成' });
+    clearAnalysisTask(analysisCompletionTargetId);
     setAnalysisCompletionTargetId(null);
-  }, [analysisCompletionTargetId, currentInterview?.id, updateInterview]);
+  }, [analysisCompletionTargetId, currentInterview?.id, updateInterview, clearAnalysisTask]);
 
   // 持久化登录状态与用户档案
   useEffect(() => {
@@ -357,6 +480,9 @@ export default function App() {
       delete copy[id];
       return copy;
     });
+
+    clearUploadTask(id);
+    clearAnalysisTask(id);
     
     // Close dialog and reset state
     setDeleteDialogOpen(false);
@@ -413,17 +539,26 @@ export default function App() {
   };
 
   // Handle file upload complete
-  const handleUploadComplete = (info: { fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => {
-    setCurrentStep(2);
-    if (selectedInterviewId) {
-      updateInterview(selectedInterviewId, {
-        status: '已上传文件',
-        fileUrl: info.filePath,
-        fileType: info.fileType,
-        durationSeconds: info.durationSeconds,
-        durationText: info.durationText,
-      });
+  const handleUploadComplete = (info: {
+    interviewId: string;
+    fileName: string;
+    filePath: string;
+    fileType?: string;
+    durationSeconds?: number;
+    durationText?: string;
+  }) => {
+    if (!info.interviewId) return;
+    completeUploadTaskState(info.interviewId);
+    if (selectedInterviewIdRef.current === info.interviewId) {
+      setCurrentStep(2);
     }
+    updateInterview(info.interviewId, {
+      status: '已上传文件',
+      fileUrl: info.filePath,
+      fileType: info.fileType,
+      durationSeconds: info.durationSeconds,
+      durationText: info.durationText,
+    });
     toast.success(`「${info.fileName}」上传完成`);
   };
 
@@ -449,11 +584,14 @@ export default function App() {
 
     updateInterview(analyzingInterviewId, { status: '分析中' });
     setAnalysisCompletionTargetId(null);
+    beginAnalysisTask(analyzingInterviewId);
     setCurrentStep(3);
 
     toast.success('开始分析面试内容...', {
       description: '正在进行转录和分析，预计需要 1-2 分钟',
     });
+
+    let analysisGenerated = false;
 
     try {
       let transcriptText = currentInterview?.transcriptText;
@@ -477,20 +615,24 @@ export default function App() {
         ...prev,
         [analyzingInterviewId]: analysis,
       }));
+      analysisGenerated = true;
       toast.success('分析完成！', {
         description: '面试报告已生成',
       });
 
+      completeAnalysisTask(analyzingInterviewId);
+
       if (selectedInterviewIdRef.current === analyzingInterviewId) {
         setAnalysisCompletionTargetId(analyzingInterviewId);
-        setAnalysisCompletionSignal((signal) => signal + 1);
       } else {
         updateInterview(analyzingInterviewId, { status: '已完成' });
+        clearAnalysisTask(analyzingInterviewId);
+        setViewMode('report');
       }
     } catch (error) {
       console.error('[analysis] 调用失败：', error);
-      const description = error instanceof Error ? error.message : '请稍后重试';
-      toast.error('分析失败', { description });
+      let failureReason = error instanceof Error ? error.message : '请稍后重试';
+      toast.error('分析失败', { description: failureReason });
 
       try {
         const mockData = getMockAnalysisData({
@@ -501,19 +643,28 @@ export default function App() {
           ...prev,
           [analyzingInterviewId]: mockData,
         }));
+        analysisGenerated = true;
         toast.info('已加载示例分析', {
           description: 'LLM 服务不可用，已展示示例数据用于演示效果',
         });
 
+        completeAnalysisTask(analyzingInterviewId);
         if (selectedInterviewIdRef.current === analyzingInterviewId) {
           setAnalysisCompletionTargetId(analyzingInterviewId);
-          setAnalysisCompletionSignal((signal) => signal + 1);
         } else {
           updateInterview(analyzingInterviewId, { status: '已完成' });
+          clearAnalysisTask(analyzingInterviewId);
+          setViewMode('report');
         }
       } catch (mockError) {
         console.warn('[analysis] 加载示例数据失败：', mockError);
         updateInterview(analyzingInterviewId, { status: '分析失败' });
+        failureReason =
+          mockError instanceof Error ? mockError.message : '示例数据加载失败，请稍后重试';
+      }
+      if (!analysisGenerated) {
+        failAnalysisTask(analyzingInterviewId, failureReason);
+        clearAnalysisTask(analyzingInterviewId);
       }
     }
   };
@@ -544,6 +695,8 @@ export default function App() {
     setIsLoggedIn(false);
     setCurrentUserProfile(null);
     setHasLoadedRemoteData(false);
+    setUploadTasks({});
+    setAnalysisTasks({});
     localStorage.removeItem('interreview_isLoggedIn');
     localStorage.removeItem('interreview_currentUserProfile');
     // 内存中保留当前的 interviews/messages，不清空本地存储，便于下次登录继续
@@ -675,15 +828,12 @@ export default function App() {
               /* Show analyzing loader for "分析中" status */
               <AnalyzingLoader
                 interviewName={currentInterview?.title}
-                completionSignal={
-                  currentInterview?.id === analysisCompletionTargetId
-                    ? analysisCompletionSignal
-                    : undefined
-                }
+                task={currentInterview?.id ? analysisTasks[currentInterview.id] : undefined}
                 onVisualComplete={() => {
                   if (!currentInterview) return;
                   updateInterview(currentInterview.id, { status: '已完成' });
                   setViewMode('report');
+                  clearAnalysisTask(currentInterview.id);
                   setAnalysisCompletionTargetId(null);
                 }}
               />
@@ -713,6 +863,9 @@ export default function App() {
                   interviewTitle={currentInterview?.title}
                   interviewStatus={currentInterview?.status}
                   interviewFileUrl={currentInterview?.fileUrl}
+                  uploadTask={uploadTasks[selectedInterviewId]}
+                  onUploadStart={beginUploadTask}
+                  onUploadError={failUploadTask}
                   onUploadComplete={handleUploadComplete} 
                   onStartAnalysis={handleStartAnalysis}
                   initialTranscript={currentInterview?.transcriptText}

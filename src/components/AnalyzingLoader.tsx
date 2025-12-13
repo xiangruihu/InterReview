@@ -1,20 +1,30 @@
 import { Sparkles, Loader2, FileAudio, Brain, ListChecks } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
-import { useStagedProgress } from '../hooks/useStagedProgress';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AnalysisTaskState } from '../types/uploads';
+import { computeTaskProgress, shouldAnimateTaskProgress } from '../utils/stagedTaskProgress';
+import {
+  DEFAULT_ANALYSIS_COMPLETION_DURATION,
+  DEFAULT_ANALYSIS_PROGRESS_CONFIG,
+} from '../constants/progress';
 
 interface AnalyzingLoaderProps {
   interviewName?: string;
-  completionSignal?: number;
+  task?: AnalysisTaskState;
   onVisualComplete?: () => void;
 }
 
 export function AnalyzingLoader({
   interviewName = '面试录音',
-  completionSignal,
+  task,
   onVisualComplete,
 }: AnalyzingLoaderProps) {
-  const { progress, start, complete, reset } = useStagedProgress({ fastDuration: 30, fastTarget: 50, slowSpan: 40, slowSpeed: 0.08, maxWhileRunning: 90 });
-  const hasCompletedRef = useRef(false);
+  const [progress, setProgress] = useState(() =>
+    computeTaskProgress(task, {
+      config: DEFAULT_ANALYSIS_PROGRESS_CONFIG,
+      completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
+    })
+  );
+  const completionNotifiedRef = useRef(false);
 
   const steps = useMemo(
     () => [
@@ -41,19 +51,52 @@ export function AnalyzingLoader({
   );
 
   useEffect(() => {
-    start();
-    return () => {
-      reset();
+    if (!task) {
+      setProgress(0);
+      return;
+    }
+
+    let raf: number | null = null;
+    let cancelled = false;
+
+    const update = () => {
+      if (cancelled) return;
+      setProgress(
+        computeTaskProgress(task, {
+          config: DEFAULT_ANALYSIS_PROGRESS_CONFIG,
+          completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
+        })
+      );
+      if (
+        shouldAnimateTaskProgress(task, {
+          completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
+        })
+      ) {
+        raf = window.requestAnimationFrame(update);
+      }
     };
-  }, [reset, start]);
+
+    update();
+
+    return () => {
+      cancelled = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+    };
+  }, [task]);
 
   useEffect(() => {
-    if (!completionSignal || hasCompletedRef.current) return;
-    hasCompletedRef.current = true;
-    complete(600).then(() => {
-      onVisualComplete?.();
-    });
-  }, [complete, completionSignal, onVisualComplete]);
+    completionNotifiedRef.current = false;
+  }, [task?.startedAt]);
+
+  useEffect(() => {
+    if (!task || task.status !== 'success') return;
+    if (progress < 100) return;
+    if (completionNotifiedRef.current) return;
+    completionNotifiedRef.current = true;
+    onVisualComplete?.();
+  }, [task, progress, onVisualComplete]);
 
   const currentStep = useMemo(() => {
     if (progress < 50) return 0;
@@ -86,8 +129,11 @@ export function AnalyzingLoader({
             </div>
             <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
               <div 
-                className="h-full bg-gradient-to-r from-blue-500 to-blue-600 transition-all duration-300 ease-out relative"
-                style={{ width: `${progress}%` }}
+                className="h-full bg-gradient-to-r from-blue-500 to-blue-600 relative"
+                style={{ 
+                  width: `${progress}%`,
+                  transition: 'width 0.05s linear'
+                }}
               >
                 <div className="absolute inset-0 bg-white/20 animate-shimmer"></div>
               </div>

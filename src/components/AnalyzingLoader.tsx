@@ -1,68 +1,65 @@
 import { Sparkles, Loader2, FileAudio, Brain, ListChecks } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { useStagedProgress } from '../hooks/useStagedProgress';
 
 interface AnalyzingLoaderProps {
   interviewName?: string;
+  completionSignal?: number;
+  onVisualComplete?: () => void;
 }
 
-export function AnalyzingLoader({ interviewName = '面试录音' }: AnalyzingLoaderProps) {
-  const [currentStep, setCurrentStep] = useState(0);
-  const [progress, setProgress] = useState(0);
+export function AnalyzingLoader({
+  interviewName = '面试录音',
+  completionSignal,
+  onVisualComplete,
+}: AnalyzingLoaderProps) {
+  const { progress, start, complete, reset } = useStagedProgress({ fastDuration: 30, fastTarget: 50, slowSpan: 40, slowSpeed: 0.08, maxWhileRunning: 90 });
+  const hasCompletedRef = useRef(false);
 
-  const steps = [
-    {
-      id: 1,
-      icon: FileAudio,
-      title: '正在处理音频文件',
-      desc: '提取音频特征，识别语音内容',
-      duration: 3000,
-    },
-    {
-      id: 2,
-      icon: Brain,
-      title: '正在分析面试内容',
-      desc: '理解问答内容，评估回答质量',
-      duration: 4000,
-    },
-    {
-      id: 3,
-      icon: ListChecks,
-      title: '正在生成分析报告',
-      desc: '整理数据，准备改进建议',
-      duration: 3000,
-    },
-  ];
+  const steps = useMemo(
+    () => [
+      {
+        id: 1,
+        icon: FileAudio,
+        title: '正在处理音频文件',
+        desc: '提取音频特征，识别语音内容（约 20 秒）',
+      },
+      {
+        id: 2,
+        icon: Brain,
+        title: '正在分析面试内容',
+        desc: '理解问答内容，评估回答质量（约 35 秒）',
+      },
+      {
+        id: 3,
+        icon: ListChecks,
+        title: '正在生成分析报告',
+        desc: '整理数据，准备改进建议（约 25 秒）',
+      },
+    ],
+    []
+  );
 
-  // Simulate progress animation
   useEffect(() => {
-    const totalSteps = steps.length;
-    const stepDuration = 3500; // Average duration per step
-    
-    // Progress within current step
-    const progressInterval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 100) {
-          return 100;
-        }
-        return Math.min(prev + 1, 100);
-      });
-    }, (stepDuration * totalSteps) / 100);
-
-    // Step advancement
-    const stepInterval = setInterval(() => {
-      setCurrentStep((prev) => {
-        if (prev < totalSteps - 1) {
-          return prev + 1;
-        }
-        return prev;
-      });
-    }, stepDuration);
-
+    start();
     return () => {
-      clearInterval(progressInterval);
-      clearInterval(stepInterval);
+      reset();
     };
-  }, []);
+  }, [reset, start]);
+
+  useEffect(() => {
+    if (!completionSignal || hasCompletedRef.current) return;
+    hasCompletedRef.current = true;
+    complete(600).then(() => {
+      onVisualComplete?.();
+    });
+  }, [complete, completionSignal, onVisualComplete]);
+
+  const currentStep = useMemo(() => {
+    if (progress < 50) return 0;
+    if (progress < 80) return 1;
+    return 2;
+  }, [progress]);
 
   return (
     <div className="flex items-center justify-center min-h-[60vh]">
@@ -85,7 +82,7 @@ export function AnalyzingLoader({ interviewName = '面试录音' }: AnalyzingLoa
           <div className="mb-8">
             <div className="flex items-center justify-between text-sm mb-2">
               <span className="text-gray-600">分析进度</span>
-              <span className="text-blue-600">{progress}%</span>
+              <span className="text-blue-600">{Math.round(progress)}%</span>
             </div>
             <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
               <div 
@@ -189,7 +186,7 @@ export function AnalyzingLoader({ interviewName = '面试录音' }: AnalyzingLoa
             <div className="flex items-start gap-3 text-sm text-gray-600">
               <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
               <p>
-                <span className="text-gray-700">预计还需 30-60 秒</span>
+                <span className="text-gray-700">预计还需约 80 秒</span>
                 <span className="text-gray-500">
                   {' '}• 分析完成后将自动显示详细报告，包含问答解析、评分和改进建议
                 </span>

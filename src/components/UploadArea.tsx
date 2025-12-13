@@ -11,6 +11,7 @@ import {
 import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner@2.0.3';
 import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../utils/backend';
+import { useStagedProgress } from '../hooks/useStagedProgress';
 import { formatDuration } from '../utils/time';
 
 const MEDIA_DURATION_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.mp4'];
@@ -93,7 +94,7 @@ interface UploadAreaProps {
   onTranscriptUpdate?: (text: string) => void;
 }
 
-type UploadStage = 'idle' | 'uploading' | 'transcribing';
+type UploadStage = 'idle' | 'uploading';
 
 export function UploadArea({
   userId,
@@ -108,7 +109,12 @@ export function UploadArea({
 }: UploadAreaProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const {
+    progress: uploadProgress,
+    start: startUploadProgress,
+    complete: completeUploadProgress,
+    reset: resetUploadProgress,
+  } = useStagedProgress();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -165,7 +171,7 @@ export function UploadArea({
     try {
       setIsUploading(true);
       setUploadStage('uploading');
-      setUploadProgress(10);
+      startUploadProgress();
       const isTextFile = isTextTranscriptFile(file);
       const durationPromise = getMediaDuration(file);
       const [result, durationSeconds] = await Promise.all([
@@ -173,7 +179,8 @@ export function UploadArea({
         durationPromise,
       ]);
       const durationText = formatDuration(durationSeconds ?? undefined);
-      setUploadProgress(60);
+      await completeUploadProgress();
+      setUploadStage('idle');
       setUploadedFile(file);
       toast.success(`「${file.name}」上传成功`);
       onUploadComplete?.({
@@ -196,17 +203,15 @@ export function UploadArea({
           toast.error('导入文本失败', { description: message });
         } finally {
           setUploadStage('idle');
-          setIsTranscribing(false);
         }
       } else {
-        setUploadStage('transcribing');
-        await runTranscription({ trackUploadProgress: true });
+        toast.info('上传完成，点击“重新转写”即可生成文字稿');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '上传失败，请稍后重试';
       toast.error('上传失败', { description: message });
-      setUploadProgress(0);
       setUploadStage('idle');
+      resetUploadProgress();
     } finally {
       setUploadStage('idle');
       setIsUploading(false);
@@ -283,15 +288,9 @@ export function UploadArea({
       return;
     }
 
-    let progressTimer: ReturnType<typeof setInterval> | null = null;
     try {
       setIsTranscribing(true);
       setTranscriptionError(null);
-      if (options?.trackUploadProgress) {
-        progressTimer = setInterval(() => {
-          setUploadProgress(prev => (prev >= 95 ? prev : prev + 1));
-        }, 400);
-      }
       const transcriptData = await transcribeInterview(userId, interviewId);
       const text = transcriptData?.text || '';
       setTranscript(text);
@@ -303,16 +302,6 @@ export function UploadArea({
       setTranscriptionError(message);
       toast.error('转写失败', { description: message });
     } finally {
-      if (progressTimer) {
-        clearInterval(progressTimer);
-        progressTimer = null;
-      }
-      if (options?.trackUploadProgress) {
-        setUploadProgress(100);
-      }
-      if (uploadStage !== 'idle') {
-        setUploadStage('idle');
-      }
       setIsTranscribing(false);
     }
   };
@@ -366,9 +355,15 @@ export function UploadArea({
 
   useEffect(() => {
     setUploadedFile(null);
-    setUploadProgress(0);
     setUploadStage('idle');
+    resetUploadProgress();
   }, [userId, interviewId]);
+
+  useEffect(() => {
+    return () => {
+      resetUploadProgress();
+    };
+  }, [resetUploadProgress]);
 
   return (
     <div className="space-y-6">
@@ -498,13 +493,11 @@ export function UploadArea({
             </div>
           </div>
         )}
-        {uploadStage !== 'idle' && (
+        {uploadStage === 'uploading' && (
           <div className="pt-4 max-w-md mx-auto">
             <div className="flex items-center justify-between text-sm mb-2">
-              <span className="text-gray-600">
-                {uploadStage === 'transcribing' ? '转写中...' : '上传中...'}
-              </span>
-              <span className="text-blue-600">{uploadProgress}%</span>
+              <span className="text-gray-600">上传中...</span>
+              <span className="text-blue-600">{Math.round(uploadProgress)}%</span>
             </div>
             <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
               <div

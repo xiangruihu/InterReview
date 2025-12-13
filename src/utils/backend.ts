@@ -191,25 +191,59 @@ export interface TranscriptPayload {
   createdAt?: string;
 }
 
+interface UploadInterviewOptions {
+  onProgress?: (percent: number) => void;
+}
+
 export async function uploadInterviewFile(
   userId: string,
   interviewId: string,
-  file: File
+  file: File,
+  options?: UploadInterviewOptions
 ): Promise<UploadInterviewResponse> {
   const formData = new FormData();
   formData.append('file', file);
 
-  const resp = await fetch(`${BACKEND_BASE}/upload/interview/${userId}/${interviewId}`, {
-    method: 'POST',
-    body: formData,
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BACKEND_BASE}/upload/interview/${userId}/${interviewId}`);
+    xhr.responseType = 'json';
+
+    if (options?.onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          options.onProgress?.(percent);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      const status = xhr.status;
+      if (status >= 200 && status < 300) {
+        let response: UploadInterviewResponse;
+        if (xhr.responseType === 'json') {
+          response = xhr.response as UploadInterviewResponse;
+        } else {
+          try {
+            response = JSON.parse(xhr.responseText);
+          } catch {
+            response = xhr.response as UploadInterviewResponse;
+          }
+        }
+        resolve(response);
+      } else {
+        const text = xhr.responseText || `HTTP ${status}`;
+        reject(new Error(`uploadInterviewFile failed: ${status} ${text}`));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('uploadInterviewFile failed: 网络错误或连接中断'));
+    };
+
+    xhr.send(formData);
   });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`uploadInterviewFile failed: ${resp.status} ${text}`);
-  }
-
-  return resp.json();
 }
 
 export async function transcribeInterview(

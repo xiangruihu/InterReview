@@ -12,11 +12,11 @@ import { AnalyzingLoader } from './components/AnalyzingLoader';
 import { EmptyState } from './components/EmptyState';
 import { MessageList } from './components/MessageList';
 import { TypingIndicator } from './components/TypingIndicator';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
 import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
-import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport } from './utils/backend';
+import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport, transcribeInterview } from './utils/backend';
 import { getMockAnalysisData } from './utils/mockAnalysis';
 import type { AnalysisData } from './types/analysis';
 
@@ -105,7 +105,7 @@ export default function App() {
   // Toggle between upload view and analysis report view
   const [viewMode, setViewMode] = useState<'upload' | 'report'>('report');
   const [currentStep, setCurrentStep] = useState(3);
-  const [selectedInterviewId, setSelectedInterviewId] = useState('2');
+  const [selectedInterviewId, setSelectedInterviewIdState] = useState('2');
   
   // Delete confirmation dialog state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -122,6 +122,31 @@ export default function App() {
 
   // Get current interview
   const currentInterview = interviews.find(i => i.id === selectedInterviewId);
+  const [analysisCompletionSignal, setAnalysisCompletionSignal] = useState(0);
+  const [analysisCompletionTargetId, setAnalysisCompletionTargetId] = useState<string | null>(null);
+  const selectedInterviewIdRef = useRef(selectedInterviewId);
+
+  const setSelectedInterviewId = useCallback((id: string) => {
+    selectedInterviewIdRef.current = id;
+    setSelectedInterviewIdState(id);
+  }, []);
+
+  const updateInterview = useCallback((id: string, data: Partial<InterviewData>) => {
+    setInterviews(prev =>
+      prev.map((interview) => (interview.id === id ? { ...interview, ...data } : interview))
+    );
+  }, []);
+
+  useEffect(() => {
+    selectedInterviewIdRef.current = selectedInterviewId;
+  }, [selectedInterviewId]);
+
+  useEffect(() => {
+    if (!analysisCompletionTargetId) return;
+    if (currentInterview?.id === analysisCompletionTargetId) return;
+    updateInterview(analysisCompletionTargetId, { status: '已完成' });
+    setAnalysisCompletionTargetId(null);
+  }, [analysisCompletionTargetId, currentInterview?.id, updateInterview]);
 
   // 持久化登录状态与用户档案
   useEffect(() => {
@@ -275,13 +300,6 @@ export default function App() {
     hydrateFromBackend(currentUserProfile);
   }, [isLoggedIn, currentUserProfile?.userId, hydrateFromBackend]);
 
-  // Update interview data
-  const updateInterview = (id: string, data: Partial<InterviewData>) => {
-    setInterviews(prev => prev.map(interview => 
-      interview.id === id ? { ...interview, ...data } : interview
-    ));
-  };
-
   // Rename interview
   const renameInterview = (id: string, newTitle: string) => {
     const oldTitle = interviews.find(i => i.id === id)?.title;
@@ -421,54 +439,81 @@ export default function App() {
       return;
     }
 
-    if (!currentInterview?.transcriptText) {
-      toast.error('暂无转录文本', { description: '请先上传文件并完成转录后再分析' });
+    if (!currentInterview?.fileUrl && !currentInterview?.fileType) {
+      toast.error('请先上传文件', { description: '需要上传音频、视频或文本文件才能进行分析' });
       return;
     }
 
-    // Update interview status to "分析中"
-    updateInterview(selectedInterviewId, { status: '分析中' });
+    const analyzingInterviewId = selectedInterviewId;
+    const { durationSeconds, durationText } = currentInterview ?? {};
+
+    updateInterview(analyzingInterviewId, { status: '分析中' });
+    setAnalysisCompletionTargetId(null);
     setCurrentStep(3);
-    
+
     toast.success('开始分析面试内容...', {
-      description: '预计需要 30-60 秒',
+      description: '正在进行转录和分析，预计需要 1-2 分钟',
     });
 
     try {
-      const analysis = await analyzeInterviewReport(currentUserProfile.userId, selectedInterviewId, {
+      let transcriptText = currentInterview?.transcriptText;
+      if (!transcriptText) {
+        try {
+          const transcriptData = await transcribeInterview(
+            currentUserProfile.userId,
+            analyzingInterviewId
+          );
+          transcriptText = transcriptData?.text || '';
+          updateInterview(analyzingInterviewId, { transcriptText });
+        } catch (transcribeError) {
+          console.warn('[transcribe] 转录失败，继续进行分析：', transcribeError);
+        }
+      }
+
+      const analysis = await analyzeInterviewReport(currentUserProfile.userId, analyzingInterviewId, {
         maxPairs: 12,
       });
-      setAnalysisResults(prev => ({
+      setAnalysisResults((prev) => ({
         ...prev,
-        [selectedInterviewId]: analysis,
+        [analyzingInterviewId]: analysis,
       }));
-      updateInterview(selectedInterviewId, { status: '已完成' });
-      setViewMode('report');
       toast.success('分析完成！', {
         description: '面试报告已生成',
       });
+
+      if (selectedInterviewIdRef.current === analyzingInterviewId) {
+        setAnalysisCompletionTargetId(analyzingInterviewId);
+        setAnalysisCompletionSignal((signal) => signal + 1);
+      } else {
+        updateInterview(analyzingInterviewId, { status: '已完成' });
+      }
     } catch (error) {
       console.error('[analysis] 调用失败：', error);
       const description = error instanceof Error ? error.message : '请稍后重试';
-      updateInterview(selectedInterviewId, { status: '分析失败' });
       toast.error('分析失败', { description });
 
       try {
         const mockData = getMockAnalysisData({
-          durationSeconds: currentInterview?.durationSeconds,
-          durationText: currentInterview?.durationText,
+          durationSeconds,
+          durationText,
         });
-        setAnalysisResults(prev => ({
+        setAnalysisResults((prev) => ({
           ...prev,
-          [selectedInterviewId]: mockData,
+          [analyzingInterviewId]: mockData,
         }));
-        updateInterview(selectedInterviewId, { status: '已完成' });
-        setViewMode('report');
         toast.info('已加载示例分析', {
           description: 'LLM 服务不可用，已展示示例数据用于演示效果',
         });
+
+        if (selectedInterviewIdRef.current === analyzingInterviewId) {
+          setAnalysisCompletionTargetId(analyzingInterviewId);
+          setAnalysisCompletionSignal((signal) => signal + 1);
+        } else {
+          updateInterview(analyzingInterviewId, { status: '已完成' });
+        }
       } catch (mockError) {
         console.warn('[analysis] 加载示例数据失败：', mockError);
+        updateInterview(analyzingInterviewId, { status: '分析失败' });
       }
     }
   };
@@ -628,7 +673,20 @@ export default function App() {
               <EmptyState onCreateNew={createNewInterview} />
             ) : currentInterview?.status === '分析中' ? (
               /* Show analyzing loader for "分析中" status */
-              <AnalyzingLoader interviewName={currentInterview?.title} />
+              <AnalyzingLoader
+                interviewName={currentInterview?.title}
+                completionSignal={
+                  currentInterview?.id === analysisCompletionTargetId
+                    ? analysisCompletionSignal
+                    : undefined
+                }
+                onVisualComplete={() => {
+                  if (!currentInterview) return;
+                  updateInterview(currentInterview.id, { status: '已完成' });
+                  setViewMode('report');
+                  setAnalysisCompletionTargetId(null);
+                }}
+              />
             ) : viewMode === 'upload' ? (
               <>
                 {/* Welcome Title */}

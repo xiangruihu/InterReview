@@ -2,3 +2,4 @@
 *.env
 backend/data/*
 InterReview.zip
+backend/uploads/*

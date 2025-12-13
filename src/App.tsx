@@ -134,6 +134,7 @@ export default function App() {
   const currentInterview = interviews.find(i => i.id === selectedInterviewId);
   const [analysisCompletionTargetId, setAnalysisCompletionTargetId] = useState<string | null>(null);
   const selectedInterviewIdRef = useRef(selectedInterviewId);
+  const abortedAnalysisIdsRef = useRef<Set<string>>(new Set());
 
   const setSelectedInterviewId = useCallback((id: string) => {
     selectedInterviewIdRef.current = id;
@@ -434,15 +435,7 @@ export default function App() {
   const showDeleteDialog = (id: string) => {
     const interview = interviews.find(i => i.id === id);
     if (!interview) return;
-    
-    // Check if trying to delete an interview that is being analyzed
-    if (interview.status === '分析中') {
-      toast.error('该面试正在分析中，无法删除', {
-        description: '请等待分析完成后再删除',
-      });
-      return;
-    }
-    
+
     setInterviewToDelete(interview);
     setDeleteDialogOpen(true);
   };
@@ -453,6 +446,7 @@ export default function App() {
     
     const id = interviewToDelete.id;
     const title = interviewToDelete.title;
+    const wasAnalyzing = interviewToDelete.status === '分析中';
 
     // If deleting the currently selected interview, select another one
     if (id === selectedInterviewId) {
@@ -483,6 +477,13 @@ export default function App() {
 
     clearUploadTask(id);
     clearAnalysisTask(id);
+    if (wasAnalyzing) {
+      abortedAnalysisIdsRef.current.add(id);
+      if (analysisCompletionTargetId === id) {
+        setAnalysisCompletionTargetId(null);
+      }
+      toast.info(`「${title}」的分析已被终止并删除`);
+    }
     
     // Close dialog and reset state
     setDeleteDialogOpen(false);
@@ -584,6 +585,7 @@ export default function App() {
 
     updateInterview(analyzingInterviewId, { status: '分析中' });
     setAnalysisCompletionTargetId(null);
+    abortedAnalysisIdsRef.current.delete(analyzingInterviewId);
     beginAnalysisTask(analyzingInterviewId);
     setCurrentStep(3);
 
@@ -611,6 +613,11 @@ export default function App() {
       const analysis = await analyzeInterviewReport(currentUserProfile.userId, analyzingInterviewId, {
         maxPairs: 12,
       });
+      if (abortedAnalysisIdsRef.current.has(analyzingInterviewId)) {
+        clearAnalysisTask(analyzingInterviewId);
+        abortedAnalysisIdsRef.current.delete(analyzingInterviewId);
+        return;
+      }
       setAnalysisResults((prev) => ({
         ...prev,
         [analyzingInterviewId]: analysis,
@@ -632,6 +639,11 @@ export default function App() {
     } catch (error) {
       console.error('[analysis] 调用失败：', error);
       let failureReason = error instanceof Error ? error.message : '请稍后重试';
+      if (abortedAnalysisIdsRef.current.has(analyzingInterviewId)) {
+        clearAnalysisTask(analyzingInterviewId);
+        abortedAnalysisIdsRef.current.delete(analyzingInterviewId);
+        return;
+      }
       toast.error('分析失败', { description: failureReason });
 
       try {

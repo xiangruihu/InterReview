@@ -9,7 +9,7 @@ try:
 except ImportError:  # pragma: no cover - fallback for mock mode
     requests = None
 import asyncio
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
 from datetime import datetime
 
@@ -28,6 +28,8 @@ class TranscriptionService:
             '.wav', '.m4a', '.mp4', '.avi', '.mov', '.flac', '.ogg'
         }
         self.max_file_size = 200 * 1024 * 1024  # 200MB, 与上传保持一致
+        self.chunk_duration_seconds = int(os.getenv("TRANSCRIPTION_CHUNK_SECONDS", "600"))
+        self.max_parallel_chunks = int(os.getenv("TRANSCRIPTION_CHUNK_WORKERS", "3"))
         mock_flag = os.getenv("MOCK_TRANSCRIPTION", "").lower() == "true"
         self.use_mock = mock_flag or not api_key
 
@@ -60,6 +62,9 @@ class TranscriptionService:
         if self.use_mock:
             return self._generate_mock_transcript(file_path)
 
+        chunk_dir: Optional[Path] = None
+        chunk_files: List[Path] = []
+
         try:
             temp_file: Optional[Path] = None
             transcription_target = file_path
@@ -68,11 +73,15 @@ class TranscriptionService:
                 temp_file = self._convert_to_mp3(file_path)
                 transcription_target = temp_file
 
-            return await asyncio.to_thread(
-                self._transcribe_via_requests,
-                transcription_target,
-                model
-            )
+            if self._should_chunk_audio(transcription_target):
+                chunk_dir = Path(tempfile.mkdtemp(prefix="ir_chunk_"))
+                chunk_files = self._split_audio_file(transcription_target, chunk_dir)
+
+            if chunk_files:
+                chunk_texts = await self._transcribe_chunks(chunk_files, model)
+                return self._combine_chunk_texts(chunk_texts, chunk_files)
+
+            return await asyncio.to_thread(self._transcribe_via_requests, transcription_target, model)
         except Exception as exc:
             print(f"转录失败，使用模拟数据: {exc}")
             return self._generate_mock_transcript(file_path)
@@ -82,6 +91,8 @@ class TranscriptionService:
                     temp_file.unlink()
                 except Exception as cleanup_error:
                     logger.debug("Failed to remove temp file %s: %s", temp_file, cleanup_error)
+            if chunk_dir and chunk_dir.exists():
+                shutil.rmtree(chunk_dir, ignore_errors=True)
 
     def _transcribe_via_requests(self, file_path: Path, model: str) -> Optional[str]:
         if requests is None:
@@ -136,6 +147,13 @@ class TranscriptionService:
         """判断是否需要在转录前将文件转为 MP3"""
         return file_path.suffix.lower() in self.convertible_extensions
 
+    def _should_chunk_audio(self, file_path: Path) -> bool:
+        """检查音频长度是否需要切片"""
+        duration = self._get_audio_duration_seconds(file_path)
+        if duration is None:
+            return False
+        return duration > max(self.chunk_duration_seconds * 1.5, self.chunk_duration_seconds + 60)
+
     def _convert_to_mp3(self, file_path: Path) -> Path:
         """通过 ffmpeg 将音/视频转码为 mp3 以满足硅基流动接口要求"""
         ffmpeg_path = shutil.which("ffmpeg")
@@ -175,6 +193,95 @@ class TranscriptionService:
             temp_path.name
         )
         return temp_path
+
+    def _get_audio_duration_seconds(self, file_path: Path) -> Optional[float]:
+        """使用 ffprobe 获取音频时长"""
+        ffprobe_path = shutil.which("ffprobe")
+        if not ffprobe_path:
+            return None
+
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe_path,
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(file_path)
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            return float(result.stdout.strip())
+        except Exception as exc:
+            logger.debug("Failed to obtain duration for %s: %s", file_path, exc)
+            return None
+
+    def _split_audio_file(self, file_path: Path, output_dir: Path) -> List[Path]:
+        """将音频切分为多个片段以便并发转录"""
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            logger.warning("切片失败：系统未安装 ffmpeg")
+            return []
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        segment_pattern = output_dir / "chunk_%03d.mp3"
+
+        command = [
+            ffmpeg_path,
+            "-y",
+            "-i", str(file_path),
+            "-f", "segment",
+            "-segment_time", str(self.chunk_duration_seconds),
+            "-c", "copy",
+            str(segment_pattern)
+        ]
+
+        process = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        if process.returncode != 0:
+            stderr = process.stderr.decode('utf-8', errors='ignore') if process.stderr else ''
+            logger.error("音频切片失败: %s", stderr.strip() or "unknown error")
+            return []
+
+        chunks = sorted(output_dir.glob("chunk_*.mp3"))
+        logger.info("Split %s into %d segments", file_path.name, len(chunks))
+        return chunks
+
+    async def _transcribe_chunks(self, chunk_files: List[Path], model: str) -> List[str]:
+        """并发转录切片"""
+        semaphore = asyncio.Semaphore(max(1, self.max_parallel_chunks))
+        results: List[Optional[str]] = [None] * len(chunk_files)
+
+        async def worker(idx: int, chunk_path: Path):
+            async with semaphore:
+                try:
+                    text = await asyncio.to_thread(self._transcribe_via_requests, chunk_path, model)
+                except Exception as exc:
+                    logger.error("切片 %s 转录失败: %s", chunk_path.name, exc)
+                    text = ""
+                results[idx] = text or ""
+
+        tasks = [asyncio.create_task(worker(idx, path)) for idx, path in enumerate(chunk_files)]
+        await asyncio.gather(*tasks)
+        return [text or "" for text in results]
+
+    def _combine_chunk_texts(self, texts: List[str], chunk_files: List[Path]) -> str:
+        """合并分片转录结果"""
+        combined_segments = []
+        for idx, text in enumerate(texts):
+            label = chunk_files[idx].name if idx < len(chunk_files) else f"chunk_{idx:03d}"
+            header = f"【分片 {idx + 1}/{len(texts)} · {label}】"
+            combined_segments.append(header)
+            combined_segments.append(text.strip())
+            combined_segments.append("")
+        return "\n".join(segment for segment in combined_segments if segment.strip())
 
 # 测试函数
 async def test_transcription():

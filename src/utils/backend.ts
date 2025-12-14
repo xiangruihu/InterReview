@@ -195,6 +195,25 @@ interface UploadInterviewOptions {
   onProgress?: (percent: number) => void;
 }
 
+export interface ChatRequestPayload {
+  question: string;
+  model?: string;
+}
+
+export interface ChatResponsePayload {
+  answer: string;
+  assistantMessage: MessageDTO;
+  userMessage: MessageDTO;
+  history: MessageDTO[];
+}
+
+export interface ChatStreamHandlers {
+  signal?: AbortSignal;
+  onChunk?: (chunk: string) => void;
+  onDone?: (payload: ChatResponsePayload) => void;
+  onError?: (message: string) => void;
+}
+
 export async function uploadInterviewFile(
   userId: string,
   interviewId: string,
@@ -288,4 +307,89 @@ export async function fetchTranscript(
 
   const data = await resp.json();
   return data?.data || null;
+}
+
+export async function chatWithInterview(
+  userId: string,
+  interviewId: string,
+  payload: ChatRequestPayload
+): Promise<ChatResponsePayload> {
+  const resp = await fetch(
+    `${BACKEND_BASE}/interviews/${interviewId}/chat?user_id=${encodeURIComponent(userId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  const data = await parseResponse(resp);
+  return data?.data as ChatResponsePayload;
+}
+
+export async function streamChatWithInterview(
+  userId: string,
+  interviewId: string,
+  payload: ChatRequestPayload,
+  handlers?: ChatStreamHandlers
+): Promise<void> {
+  const resp = await fetch(
+    `${BACKEND_BASE}/interviews/${interviewId}/chat/stream?user_id=${encodeURIComponent(userId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: handlers?.signal,
+    }
+  );
+
+  if (!resp.ok || !resp.body) {
+    const text = await resp.text();
+    throw new Error(text || `chat stream failed: ${resp.status}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const flushBuffer = (chunk: string) => {
+    buffer += chunk;
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const raw = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      if (!raw || !raw.startsWith('data:')) continue;
+      const jsonStr = raw.replace(/^data:\s*/, '');
+      if (!jsonStr) continue;
+      let data: any;
+      try {
+        data = JSON.parse(jsonStr);
+      } catch {
+        continue;
+      }
+      const type = data?.type;
+      if (type === 'chunk') {
+        handlers?.onChunk?.(data?.content ?? '');
+      } else if (type === 'done') {
+        handlers?.onDone?.(data as ChatResponsePayload);
+      } else if (type === 'error') {
+        const message = data?.message || '流式回答失败';
+        handlers?.onError?.(message);
+        throw new Error(message);
+      } else if (type === 'end') {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      flushBuffer(decoder.decode());
+      break;
+    }
+    const chunk = decoder.decode(value, { stream: true });
+    const ended = flushBuffer(chunk);
+    if (ended) break;
+  }
 }

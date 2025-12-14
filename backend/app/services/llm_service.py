@@ -1,5 +1,5 @@
 from openai import OpenAI
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Iterable
 import json
 import os
 from datetime import datetime
@@ -222,6 +222,183 @@ class LLMService:
         )
 
         return response.choices[0].message.content
+
+    async def chat_with_interview_context(
+        self,
+        *,
+        question: str,
+        history: List[Dict[str, str]],
+        transcript_text: str,
+        qa_pairs: List[Dict[str, Any]],
+        interview_meta: Dict[str, Any],
+        model: Optional[str] = None
+    ) -> str:
+        """
+        将面试上下文（转录、问答、元信息）与多轮对话结合，生成回答。
+        """
+
+        chat_messages = self._build_interview_chat_messages(
+            question=question,
+            history=history,
+            transcript_text=transcript_text,
+            qa_pairs=qa_pairs,
+            interview_meta=interview_meta
+        )
+
+        response = self.client.chat.completions.create(
+            model=model or self.default_model,
+            messages=chat_messages,
+            temperature=0.2,
+            max_tokens=1500
+        )
+
+        return response.choices[0].message.content
+
+    def stream_chat_with_interview_context(
+        self,
+        *,
+        question: str,
+        history: List[Dict[str, str]],
+        transcript_text: str,
+        qa_pairs: List[Dict[str, Any]],
+        interview_meta: Dict[str, Any],
+        model: Optional[str] = None
+    ) -> Iterable[str]:
+        """
+        以流式方式返回面试问答
+        """
+        chat_messages = self._build_interview_chat_messages(
+            question=question,
+            history=history,
+            transcript_text=transcript_text,
+            qa_pairs=qa_pairs,
+            interview_meta=interview_meta
+        )
+
+        stream = self.client.chat.completions.create(
+            model=model or self.default_model,
+            messages=chat_messages,
+            temperature=0.2,
+            max_tokens=1500,
+            stream=True
+        )
+
+        for chunk in stream:
+            choice = (chunk.choices or [None])[0]
+            if not choice:
+                continue
+            delta = getattr(choice, "delta", None)
+            if not delta:
+                continue
+            content = getattr(delta, "content", None)
+            if isinstance(content, list):
+                text = "".join([
+                    part.get("text", "") if isinstance(part, dict) else ""
+                    for part in content
+                ])
+            else:
+                text = content or ""
+            if text:
+                yield text
+
+    @staticmethod
+    def _clip_text(value: Optional[str], limit: int = 1800) -> str:
+        if not value:
+            return ""
+        value = value.strip()
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "..."
+
+    @staticmethod
+    def _format_meta(meta: Dict[str, Any]) -> str:
+        fields = [
+            ("面试标题", meta.get("title")),
+            ("公司", meta.get("company")),
+            ("岗位", meta.get("position")),
+            ("面试轮次", meta.get("roundType")),
+            ("时间", meta.get("date")),
+            ("状态", meta.get("status")),
+            ("时长", meta.get("duration")),
+            ("问答轮数", meta.get("rounds")),
+            ("综合评分", meta.get("score")),
+            ("通过率", meta.get("passRate")),
+        ]
+        lines = [f"- {label}：{value}" for label, value in fields if value]
+        return "\n".join(lines) if lines else "（暂无元信息）"
+
+    @staticmethod
+    def _format_qa(qa: List[Dict[str, Any]], limit: int = 8) -> str:
+        if not qa:
+            return "（暂无问答对）"
+        items = []
+        for idx, pair in enumerate(qa[:limit], start=1):
+            q = (pair.get("question") or "").strip()
+            a = (pair.get("answer") or "").strip()
+            category = pair.get("category")
+            prefix = f"{idx}. [{category}] " if category else f"{idx}. "
+            formatted = f"{prefix}Q: {q}\n   A: {a}"
+            items.append(formatted)
+        if len(qa) > limit:
+            items.append(f"...（共 {len(qa)} 个问答，仅展示前 {limit} 条）")
+        return "\n".join(items)
+
+    @staticmethod
+    def _trim_history_messages(messages: List[Dict[str, str]], max_chars: int = 4000) -> List[Dict[str, str]]:
+        trimmed: List[Dict[str, str]] = []
+        total = 0
+        for msg in reversed(messages):
+            role = msg.get("role")
+            content = (msg.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            length = len(content) + 20
+            if total + length > max_chars:
+                break
+            trimmed.append({"role": role, "content": content})
+            total += length
+        trimmed.reverse()
+        return trimmed
+
+    def _build_interview_chat_messages(
+        self,
+        *,
+        question: str,
+        history: List[Dict[str, str]],
+        transcript_text: str,
+        qa_pairs: List[Dict[str, Any]],
+        interview_meta: Dict[str, Any]
+    ) -> List[Dict[str, str]]:
+        system_prompt = (
+            "你是一名专业的面试复盘助手。你只能基于当前这场面试提供的上下文回答，"
+            "不允许调用其他面试或未知信息。当用户询问本场面试中不存在的内容时，"
+            "请明确说明“本次面试未涉及该内容”，不要编造。回答时尽量引用具体问答或转录片段，"
+            "并区分事实复述与分析 / 建议。"
+        )
+
+        qa_summary = self._format_qa(qa_pairs or [])
+        transcript_excerpt = self._clip_text(transcript_text, 1800) or "（暂无有效转录）"
+        meta_block = self._format_meta(interview_meta or {})
+
+        context_block = (
+            "【面试元信息】\n"
+            f"{meta_block}\n\n"
+            "【结构化问答摘要】\n"
+            f"{qa_summary}\n\n"
+            "【转录节选】\n"
+            f"{transcript_excerpt}\n"
+            "——请仅在上述上下文范围内回答问题。"
+        )
+
+        trimmed_history = self._trim_history_messages(history or [])
+
+        chat_messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": context_block},
+        ] + trimmed_history
+
+        chat_messages.append({"role": "user", "content": question.strip()})
+        return chat_messages
 
 # 测试函数
 if __name__ == "__main__":

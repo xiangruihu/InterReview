@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, Body
-from typing import Optional
+from fastapi.responses import StreamingResponse
+from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
+import json
 from pydantic import BaseModel
 import logging
 from app.models.interview import InterviewData, InterviewCreate, InterviewUpdate
@@ -24,6 +26,11 @@ class TranscriptionRequest(BaseModel):
 class AnalysisRequest(BaseModel):
     model: Optional[str] = None
     max_pairs: Optional[int] = 100
+
+class ChatRequest(BaseModel):
+    question: str
+    model: Optional[str] = None
+    stream: Optional[bool] = False
 
 @router.post("/", response_model=dict)
 async def create_interview(user_id: str, interview_data: InterviewCreate):
@@ -232,6 +239,213 @@ async def get_transcription(user_id: str, interview_id: str):
         "success": True,
         "data": transcript
     }
+
+@router.post("/{interview_id}/chat", response_model=dict)
+async def chat_with_interview(
+    user_id: str,
+    interview_id: str,
+    payload: ChatRequest = Body(...)
+):
+    """
+    基于当前面试上下文的智能问讯
+    """
+    question = (payload.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="问题不能为空")
+
+    interviews = storage.get_interviews(user_id)
+    interview = next((i for i in interviews if i.get('id') == interview_id), None)
+    if not interview:
+        raise HTTPException(status_code=404, detail="面试不存在")
+
+    transcript_record = storage.get_transcript(user_id, interview_id) or {}
+    transcript_text = (
+        transcript_record.get("text")
+        or interview.get("transcriptText")
+        or ""
+    )
+
+    analysis = storage.get_analysis(user_id, interview_id) or {}
+    qa_pairs = analysis.get("qaList") or analysis.get("qa_pairs") or []
+
+    interview_meta = {
+        "interviewId": interview_id,
+        "title": interview.get("title"),
+        "company": interview.get("company"),
+        "position": interview.get("position"),
+        "status": interview.get("status"),
+        "date": interview.get("date"),
+        "roundType": interview.get("roundType") or interview.get("round"),
+        "duration": analysis.get("duration") or interview.get("durationText"),
+        "rounds": analysis.get("rounds") or len(qa_pairs) or interview.get("rounds"),
+        "score": analysis.get("score"),
+        "passRate": analysis.get("passRate"),
+    }
+
+    messages_map = storage.get_messages(user_id)
+    interview_history = messages_map.get(interview_id, [])
+    llm_history = [
+        {
+            "role": msg.get("role"),
+            "content": msg.get("content")
+        }
+        for msg in interview_history
+        if msg.get("role") in {"user", "assistant"} and msg.get("content")
+    ]
+
+    try:
+        answer = await llm_service.chat_with_interview_context(
+            question=question,
+            history=llm_history,
+            transcript_text=transcript_text,
+            qa_pairs=qa_pairs,
+            interview_meta=interview_meta,
+            model=payload.model or settings.DEFAULT_LLM_MODEL
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成回答失败: {str(e)}")
+
+    timestamp = datetime.utcnow().isoformat()
+    user_message = {
+        "id": str(uuid.uuid4()),
+        "role": "user",
+        "content": question,
+        "timestamp": timestamp
+    }
+    assistant_message = {
+        "id": str(uuid.uuid4()),
+        "role": "assistant",
+        "content": answer,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    updated_history = interview_history + [user_message, assistant_message]
+    messages_map[interview_id] = updated_history
+    storage.save_messages(user_id, messages_map)
+
+    return {
+        "success": True,
+        "data": {
+            "answer": answer,
+            "assistantMessage": assistant_message,
+            "userMessage": user_message,
+            "history": updated_history
+        }
+    }
+
+@router.post("/{interview_id}/chat/stream")
+async def chat_with_interview_stream(
+    user_id: str,
+    interview_id: str,
+    payload: ChatRequest = Body(...)
+):
+    """
+    流式返回面试智能问讯结果 (SSE)
+    """
+    question = (payload.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="问题不能为空")
+
+    interviews = storage.get_interviews(user_id)
+    interview = next((i for i in interviews if i.get('id') == interview_id), None)
+    if not interview:
+        raise HTTPException(status_code=404, detail="面试不存在")
+
+    transcript_record = storage.get_transcript(user_id, interview_id) or {}
+    transcript_text = (
+        transcript_record.get("text")
+        or interview.get("transcriptText")
+        or ""
+    )
+
+    analysis = storage.get_analysis(user_id, interview_id) or {}
+    qa_pairs = analysis.get("qaList") or analysis.get("qa_pairs") or []
+
+    interview_meta = {
+        "interviewId": interview_id,
+        "title": interview.get("title"),
+        "company": interview.get("company"),
+        "position": interview.get("position"),
+        "status": interview.get("status"),
+        "date": interview.get("date"),
+        "roundType": interview.get("roundType") or interview.get("round"),
+        "duration": analysis.get("duration") or interview.get("durationText"),
+        "rounds": analysis.get("rounds") or len(qa_pairs) or interview.get("rounds"),
+        "score": analysis.get("score"),
+        "passRate": analysis.get("passRate"),
+    }
+
+    messages_map = storage.get_messages(user_id)
+    interview_history = messages_map.get(interview_id, [])
+    llm_history = [
+        {
+            "role": msg.get("role"),
+            "content": msg.get("content")
+        }
+        for msg in interview_history
+        if msg.get("role") in {"user", "assistant"} and msg.get("content")
+    ]
+
+    def sse(data: Dict[str, Any]) -> str:
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def event_stream():
+        yield sse({"type": "start"})
+        chunks: List[str] = []
+        try:
+            for piece in llm_service.stream_chat_with_interview_context(
+                question=question,
+                history=llm_history,
+                transcript_text=transcript_text,
+                qa_pairs=qa_pairs,
+                interview_meta=interview_meta,
+                model=payload.model or settings.DEFAULT_LLM_MODEL
+            ):
+                if not piece:
+                    continue
+                chunks.append(piece)
+                yield sse({"type": "chunk", "content": piece})
+        except Exception as exc:
+            logger.exception("[ChatStream] 生成回答失败 user=%s interview=%s", user_id, interview_id)
+            yield sse({
+                "type": "error",
+                "message": f"生成回答失败: {exc}"
+            })
+            yield sse({"type": "end"})
+            return
+
+        answer = "".join(chunks).strip()
+        if not answer:
+            yield sse({"type": "error", "message": "LLM 未返回内容"})
+            yield sse({"type": "end"})
+            return
+
+        user_message = {
+            "id": str(uuid.uuid4()),
+            "role": "user",
+            "content": question,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        assistant_message = {
+            "id": str(uuid.uuid4()),
+            "role": "assistant",
+            "content": answer,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        updated_history = interview_history + [user_message, assistant_message]
+        messages_map[interview_id] = updated_history
+        storage.save_messages(user_id, messages_map)
+
+        yield sse({
+            "type": "done",
+            "answer": answer,
+            "assistantMessage": assistant_message,
+            "userMessage": user_message,
+            "history": updated_history
+        })
+        yield sse({"type": "end"})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 @router.post("/{interview_id}/analyze", response_model=dict)
 async def analyze_interview_endpoint(

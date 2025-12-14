@@ -15,8 +15,7 @@ import { TypingIndicator } from './components/TypingIndicator';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
-import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
-import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport, transcribeInterview } from './utils/backend';
+import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport, transcribeInterview, streamChatWithInterview } from './utils/backend';
 import { getMockAnalysisData } from './utils/mockAnalysis';
 import type { AnalysisData } from './types/analysis';
 import type { UploadTaskState, AnalysisTaskState } from './types/uploads';
@@ -749,68 +748,78 @@ export default function App() {
   };
 
   // Handle send message
-  const handleSendMessage = (content: string) => {
-    if (!selectedInterviewId || isAITyping) return;
+  const handleSendMessage = async (content: string) => {
+    if (!selectedInterviewId || !currentUserProfile) return;
+    const question = (content || '').trim();
+    if (!question) return;
+    if (isAITyping) {
+      toast.info('AI 正在回答，请稍候');
+      return;
+    }
 
-    // Create user message
-    const userMessage: Message = {
+    const prevHistory = [...(interviewMessages[selectedInterviewId] || [])];
+    const optimisticMessage: Message = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      content,
+      content: question,
       timestamp: new Date().toISOString(),
     };
+    const assistantMessageId = `msg-${Date.now()}-assistant`;
+    const placeholderAssistant: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+      isStreaming: true,
+    };
 
-    // Add user message to current interview's messages
     setInterviewMessages(prev => ({
       ...prev,
-      [selectedInterviewId]: [...(prev[selectedInterviewId] || []), userMessage],
+      [selectedInterviewId]: [
+        ...(prev[selectedInterviewId] || []),
+        optimisticMessage,
+        placeholderAssistant,
+      ],
     }));
-
-    // Show AI typing indicator
     setIsAITyping(true);
 
-    // Simulate AI thinking time (1-2 seconds)
-    setTimeout(async () => {
-      // 基于历史构造多轮对话（system + 历史消息 + 当前用户消息）
-      const prevMsgs = interviewMessages[selectedInterviewId] || [];
-      const history: ChatMessage[] = [
-        { role: 'system', content: 'You are a helpful assistant. 请作为面试复盘助手，用简洁中文回答，并可使用 Markdown。' },
-        ...(prevMsgs.map(m => ({ role: m.role, content: m.content })) as ChatMessage[]),
-        { role: 'user', content },
-      ];
-
-      const aiResponse = await chatWithLLM(history);
-      
-      // Create AI message with streaming flag
-      const aiMessage: Message = {
-        id: `msg-${Date.now()}-ai`,
-        role: 'assistant',
-        content: aiResponse,
-        timestamp: new Date().toISOString(),
-        isStreaming: true,
-      };
-
-      // Add AI message
+    try {
+      await streamChatWithInterview(
+        currentUserProfile.userId,
+        selectedInterviewId,
+        { question },
+        {
+          onChunk: (chunk) => {
+            setInterviewMessages(prev => {
+              const history = prev[selectedInterviewId] || [];
+              return {
+                ...prev,
+                [selectedInterviewId]: history.map(msg =>
+                  msg.id === assistantMessageId
+                    ? { ...msg, content: (msg.content || '') + chunk }
+                    : msg
+                ),
+              };
+            });
+          },
+          onDone: (payload) => {
+            setInterviewMessages(prev => ({
+              ...prev,
+              [selectedInterviewId]: payload.history as Message[],
+            }));
+          },
+        }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '请稍后重试';
+      toast.error('智能问讯失败', { description: message });
       setInterviewMessages(prev => ({
         ...prev,
-        [selectedInterviewId]: [...(prev[selectedInterviewId] || []), aiMessage],
+        [selectedInterviewId]: prevHistory,
       }));
-
-      // Hide typing indicator
+    } finally {
       setIsAITyping(false);
-
-      // Remove streaming flag after typing animation completes
-      // Approximate time: 20ms per character
-      const typingDuration = aiResponse.length * 20;
-      setTimeout(() => {
-        setInterviewMessages(prev => ({
-          ...prev,
-          [selectedInterviewId]: prev[selectedInterviewId].map(msg =>
-            msg.id === aiMessage.id ? { ...msg, isStreaming: false } : msg
-          ),
-        }));
-      }, typingDuration);
-    }, 1000 + Math.random() * 1000); // Random delay between 1-2 seconds
+    }
   };
 
   // Get current interview messages

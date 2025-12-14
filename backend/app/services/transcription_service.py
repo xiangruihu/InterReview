@@ -1,4 +1,9 @@
 import os
+import shutil
+import subprocess
+import tempfile
+import uuid
+import logging
 try:
     import requests
 except ImportError:  # pragma: no cover - fallback for mock mode
@@ -7,6 +12,8 @@ import asyncio
 from typing import Optional
 from pathlib import Path
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class TranscriptionService:
     """语音转文字服务 - 使用 SiliconFlow API"""
@@ -17,6 +24,9 @@ class TranscriptionService:
         self.supported_extensions = [
             '.mp3', '.wav', '.m4a', '.mp4', '.avi', '.mov', '.flac', '.ogg', '.txt', '.md'
         ]
+        self.convertible_extensions = {
+            '.wav', '.m4a', '.mp4', '.avi', '.mov', '.flac', '.ogg'
+        }
         self.max_file_size = 200 * 1024 * 1024  # 200MB, 与上传保持一致
         mock_flag = os.getenv("MOCK_TRANSCRIPTION", "").lower() == "true"
         self.use_mock = mock_flag or not api_key
@@ -51,10 +61,27 @@ class TranscriptionService:
             return self._generate_mock_transcript(file_path)
 
         try:
-            return await asyncio.to_thread(self._transcribe_via_requests, file_path, model)
+            temp_file: Optional[Path] = None
+            transcription_target = file_path
+
+            if self._should_convert_to_mp3(file_path):
+                temp_file = self._convert_to_mp3(file_path)
+                transcription_target = temp_file
+
+            return await asyncio.to_thread(
+                self._transcribe_via_requests,
+                transcription_target,
+                model
+            )
         except Exception as exc:
             print(f"转录失败，使用模拟数据: {exc}")
             return self._generate_mock_transcript(file_path)
+        finally:
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception as cleanup_error:
+                    logger.debug("Failed to remove temp file %s: %s", temp_file, cleanup_error)
 
     def _transcribe_via_requests(self, file_path: Path, model: str) -> Optional[str]:
         if requests is None:
@@ -104,6 +131,50 @@ class TranscriptionService:
             f"生成时间：{datetime.utcnow().isoformat()}",
         ]
         return "\n".join(template)
+
+    def _should_convert_to_mp3(self, file_path: Path) -> bool:
+        """判断是否需要在转录前将文件转为 MP3"""
+        return file_path.suffix.lower() in self.convertible_extensions
+
+    def _convert_to_mp3(self, file_path: Path) -> Path:
+        """通过 ffmpeg 将音/视频转码为 mp3 以满足硅基流动接口要求"""
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            raise RuntimeError("系统未安装 ffmpeg，无法将文件转码为 MP3")
+
+        temp_filename = f"{file_path.stem}_{uuid.uuid4().hex}.mp3"
+        temp_path = Path(tempfile.gettempdir()) / temp_filename
+
+        command = [
+            ffmpeg_path,
+            "-y",  # overwrite temp file if needed
+            "-i", str(file_path),
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-ar", "44100",
+            "-ac", "2",
+            str(temp_path)
+        ]
+
+        process = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        if process.returncode != 0 or not temp_path.exists():
+            stderr = process.stderr.decode('utf-8', errors='ignore') if process.stderr else ''
+            temp_path.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"音频转码失败，ffmpeg 返回码 {process.returncode}: {stderr.strip() or '未知错误'}"
+            )
+
+        logger.info(
+            "Converted %s -> %s for transcription",
+            file_path.name,
+            temp_path.name
+        )
+        return temp_path
 
 # 测试函数
 async def test_transcription():

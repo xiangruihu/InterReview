@@ -3,9 +3,11 @@
 支持 JSON 文件存储（本地开发）和 Supabase 数据库（生产环境）
 """
 import json
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from app.config import settings
 
 class StorageService:
     """本地 JSON 文件存储服务"""
@@ -13,6 +15,10 @@ class StorageService:
     def __init__(self):
         self.data_dir = Path("data")
         self.data_dir.mkdir(exist_ok=True)
+        self.demo_user_id = (settings.DEMO_USER_ID or "").strip()
+        self.demo_user_email = (settings.DEMO_USER_EMAIL or "").strip().lower()
+        template_dir = (settings.DEMO_DATA_TEMPLATE_DIR or "").strip()
+        self.demo_template_dir = Path(template_dir).resolve() if template_dir else None
 
     def _get_user_file(self, user_id: str, file_name: str) -> Path:
         """获取用户数据文件路径"""
@@ -233,3 +239,91 @@ class StorageService:
         transcripts = self.get_transcripts(user_id)
         transcripts[interview_id] = transcript
         return self.save_transcripts(user_id, transcripts)
+
+    # Demo helpers -----------------------------------------------------
+    def is_demo_user(self, user_id: Optional[str] = None, email: Optional[str] = None) -> bool:
+        """判断是否为演示账号"""
+        uid = (user_id or "").strip()
+        mail = (email or "").strip().lower()
+        if self.demo_user_id and uid == self.demo_user_id:
+            return True
+        if self.demo_user_email and mail == self.demo_user_email:
+            return True
+        return False
+
+    def demo_user_exists(self) -> bool:
+        """演示账号数据是否已经初始化"""
+        if not self.demo_user_id:
+            return False
+        user_file = self._get_user_file(self.demo_user_id, "user.json")
+        return user_file.exists()
+
+    def prepare_demo_user(self, password_hash: str, reset: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        初始化/重置演示账号数据
+        reset=True 会强制覆盖为模板数据，用于用户每次登录时恢复 demo 内容
+        """
+        if not self.demo_user_id:
+            return None
+
+        force = reset or not self.demo_user_exists()
+        return self._sync_demo_template(password_hash=password_hash, force=force)
+
+    def _sync_demo_template(self, password_hash: str, force: bool) -> Optional[Dict[str, Any]]:
+        """复制模板数据到演示账号目录"""
+        if not self.demo_user_id:
+            return None
+
+        user_dir = self.data_dir / self.demo_user_id
+        if force and user_dir.exists():
+            shutil.rmtree(user_dir)
+        user_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.demo_template_dir and self.demo_template_dir.exists():
+            for template_file in self.demo_template_dir.glob("*.json"):
+                if template_file.name == "user.json":
+                    continue
+                destination = user_dir / template_file.name
+                if force or not destination.exists():
+                    shutil.copyfile(template_file, destination)
+
+        user_file = user_dir / "user.json"
+        existing = None
+        if user_file.exists() and not force:
+            try:
+                with open(user_file, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = None
+
+        user_payload = self._build_demo_user_payload(password_hash, existing)
+        with open(user_file, "w", encoding="utf-8") as f:
+            json.dump(user_payload, f, ensure_ascii=False, indent=2, default=str)
+        return user_payload
+
+    def _build_demo_user_payload(
+        self,
+        password_hash: str,
+        existing: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """构造演示用户 user.json 内容"""
+        created_at = existing.get("createdAt") if isinstance(existing, dict) else None
+        if not created_at:
+            created_at = datetime.utcnow().isoformat()
+
+        username = None
+        if isinstance(existing, dict):
+            username = existing.get("username")
+        if not username:
+            username = "演示用户"
+
+        email = self.demo_user_email or (existing.get("email") if isinstance(existing, dict) else None) or "demo@example.com"
+
+        return {
+            "userId": self.demo_user_id,
+            "username": username,
+            "email": email,
+            "createdAt": created_at,
+            "passwordHash": password_hash,
+            "version": 1
+        }

@@ -5,6 +5,7 @@ from app.services.storage_service import StorageService
 import uuid
 from datetime import datetime
 from passlib.context import CryptContext
+from app.config import settings
 
 router = APIRouter(prefix="/users", tags=["users"])
 storage = StorageService()
@@ -29,9 +30,21 @@ async def register_user(user_data: UserRegisterRequest):
             raise HTTPException(status_code=400, detail="邮箱格式不正确")
 
         existing = storage.find_user_by_email(normalized_email)
+        is_demo_account = storage.is_demo_user(email=normalized_email)
 
-        if existing and existing.get("passwordHash"):
+        if existing and existing.get("passwordHash") and not is_demo_account:
             raise HTTPException(status_code=409, detail="该邮箱已注册，请直接登录")
+
+        if is_demo_account:
+            demo_hash = existing.get("passwordHash") if existing else pwd_context.hash(settings.DEMO_USER_PASSWORD)
+            storage.prepare_demo_user(password_hash=demo_hash, reset=existing is None)
+            demo_user = storage.get_user(storage.demo_user_id) if storage.demo_user_id else None
+            if not demo_user:
+                raise HTTPException(status_code=500, detail="初始化演示账号失败")
+            return {
+                "success": True,
+                "data": sanitize_user_payload(demo_user)
+            }
 
         def _parse_created_at(value: Any) -> datetime:
             if isinstance(value, datetime):
@@ -82,13 +95,25 @@ async def login_user(credentials: UserLoginRequest):
     用户登录
     """
     normalized_email = credentials.email.strip().lower()
+    is_demo_account = storage.is_demo_user(email=normalized_email)
     user_record = storage.find_user_by_email(normalized_email)
+
+    if is_demo_account and not user_record:
+        demo_hash = pwd_context.hash(settings.DEMO_USER_PASSWORD)
+        storage.prepare_demo_user(password_hash=demo_hash, reset=True)
+        user_record = storage.find_user_by_email(normalized_email)
+
     if not user_record:
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
 
     password_hash = user_record.get("passwordHash")
     if not password_hash or not pwd_context.verify(credentials.password, password_hash):
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
+
+    if is_demo_account:
+        refreshed = storage.prepare_demo_user(password_hash=password_hash, reset=True)
+        if refreshed:
+            user_record = refreshed
 
     return {
         "success": True,

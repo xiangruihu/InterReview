@@ -12,7 +12,7 @@ import { AnalyzingLoader } from './components/AnalyzingLoader';
 import { EmptyState } from './components/EmptyState';
 import { MessageList } from './components/MessageList';
 import { TypingIndicator } from './components/TypingIndicator';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
 import { chatWithLLM, type ChatMessage } from './utils/mockAIResponses';
@@ -27,6 +27,8 @@ import {
   DEFAULT_ANALYSIS_PROGRESS_CONFIG,
   DEFAULT_ANALYSIS_COMPLETION_DURATION,
 } from './constants/progress';
+
+const DEMO_USER_EMAIL = 'demo@example.com';
 
 // 用户档案模型
 interface UserProfile {
@@ -109,6 +111,10 @@ export default function App() {
     }
     return null;
   });
+  const isDemoUser = useMemo(
+    () => ((currentUserProfile?.email || '').toLowerCase() === DEMO_USER_EMAIL),
+    [currentUserProfile?.email]
+  );
 
   // Toggle between upload view and analysis report view
   const [viewMode, setViewMode] = useState<'upload' | 'report'>('report');
@@ -282,55 +288,67 @@ export default function App() {
 
   // 用户维度持久化：面试列表（本地备份）
   useEffect(() => {
-    if (currentUserProfile) {
-      localStorage.setItem(`interreview_interviews_${currentUserProfile.userId}`, JSON.stringify(interviews));
+    if (!currentUserProfile) return;
+    const key = `interreview_interviews_${currentUserProfile.userId}`;
+    if (isDemoUser) {
+      localStorage.removeItem(key);
+      return;
     }
-  }, [interviews, currentUserProfile]);
+    localStorage.setItem(key, JSON.stringify(interviews));
+  }, [interviews, currentUserProfile, isDemoUser]);
 
   // 用户维度持久化：对话消息（本地备份）
   useEffect(() => {
-    if (currentUserProfile) {
-      localStorage.setItem(`interreview_messages_${currentUserProfile.userId}`, JSON.stringify(interviewMessages));
+    if (!currentUserProfile) return;
+    const key = `interreview_messages_${currentUserProfile.userId}`;
+    if (isDemoUser) {
+      localStorage.removeItem(key);
+      return;
     }
-  }, [interviewMessages, currentUserProfile]);
+    localStorage.setItem(key, JSON.stringify(interviewMessages));
+  }, [interviewMessages, currentUserProfile, isDemoUser]);
 
   // 用户维度持久化：分析结果（本地备份）
   useEffect(() => {
-    if (currentUserProfile) {
-      localStorage.setItem(`interreview_analysis_${currentUserProfile.userId}`, JSON.stringify(analysisResults));
+    if (!currentUserProfile) return;
+    const key = `interreview_analysis_${currentUserProfile.userId}`;
+    if (isDemoUser) {
+      localStorage.removeItem(key);
+      return;
     }
-  }, [analysisResults, currentUserProfile]);
+    localStorage.setItem(key, JSON.stringify(analysisResults));
+  }, [analysisResults, currentUserProfile, isDemoUser]);
 
   // 同步到后端：面试列表
   useEffect(() => {
-    if (!currentUserProfile || !hasLoadedRemoteData) return;
+    if (!currentUserProfile || !hasLoadedRemoteData || isDemoUser) return;
     (async () => {
       try { await saveInterviews(currentUserProfile.userId, interviews as any); } catch (e) {
         console.warn('[backend] saveInterviews 失败：', e);
       }
     })();
-  }, [interviews, currentUserProfile?.userId, hasLoadedRemoteData]);
+  }, [interviews, currentUserProfile?.userId, hasLoadedRemoteData, isDemoUser]);
 
   // 同步到后端：对话消息
   useEffect(() => {
-    if (!currentUserProfile || !hasLoadedRemoteData) return;
+    if (!currentUserProfile || !hasLoadedRemoteData || isDemoUser) return;
     (async () => {
       try { await saveMessages(currentUserProfile.userId, interviewMessages as any); } catch (e) {
         console.warn('[backend] saveMessages 失败：', e);
       }
     })();
-  }, [interviewMessages, currentUserProfile?.userId, hasLoadedRemoteData]);
+  }, [interviewMessages, currentUserProfile?.userId, hasLoadedRemoteData, isDemoUser]);
 
   // 同步到后端：分析结果
   useEffect(() => {
-    if (!currentUserProfile || !hasLoadedRemoteData) return;
+    if (!currentUserProfile || !hasLoadedRemoteData || isDemoUser) return;
     if (!analysisResults || Object.keys(analysisResults).length === 0) return;
     (async () => {
       try { await saveAnalysis(currentUserProfile.userId, analysisResults as any); } catch (e) {
         console.warn('[backend] saveAnalysis 失败：', e);
       }
     })();
-  }, [analysisResults, currentUserProfile?.userId, hasLoadedRemoteData]);
+  }, [analysisResults, currentUserProfile?.userId, hasLoadedRemoteData, isDemoUser]);
 
   const restoreSelectedInterview = useCallback((userId: string) => {
     const savedSelected = localStorage.getItem(`interreview_selectedInterview_${userId}`);
@@ -394,6 +412,7 @@ export default function App() {
 
   const hydrateFromBackend = useCallback(async (profile: UserProfile) => {
     setHasLoadedRemoteData(false);
+    const isDemoProfile = ((profile.email || '').toLowerCase() === DEMO_USER_EMAIL);
     try {
       const [remoteInterviews, remoteMessages, remoteAnalysis] = await Promise.all([
         fetchInterviews(profile.userId),
@@ -413,7 +432,14 @@ export default function App() {
       restoreSelectedInterview(profile.userId);
     } catch (e) {
       console.warn('[backend] 无法连接后端，使用本地数据：', e);
-      loadLocalBackup(profile.userId, profile.username);
+      if (isDemoProfile) {
+        setInterviews(getDefaultInterviews());
+        setInterviewMessages({});
+        setAnalysisResults({});
+        restoreSelectedInterview(profile.userId);
+      } else {
+        loadLocalBackup(profile.userId, profile.username);
+      }
     } finally {
       setHasLoadedRemoteData(true);
     }
@@ -704,6 +730,8 @@ export default function App() {
 
   // Handle logout
   const handleLogout = () => {
+    const lastProfile = currentUserProfile;
+    const wasDemoUser = ((lastProfile?.email || '').toLowerCase() === DEMO_USER_EMAIL);
     setIsLoggedIn(false);
     setCurrentUserProfile(null);
     setHasLoadedRemoteData(false);
@@ -711,6 +739,12 @@ export default function App() {
     setAnalysisTasks({});
     localStorage.removeItem('interreview_isLoggedIn');
     localStorage.removeItem('interreview_currentUserProfile');
+    if (lastProfile && wasDemoUser) {
+      localStorage.removeItem(`interreview_interviews_${lastProfile.userId}`);
+      localStorage.removeItem(`interreview_messages_${lastProfile.userId}`);
+      localStorage.removeItem(`interreview_analysis_${lastProfile.userId}`);
+      localStorage.removeItem(`interreview_selectedInterview_${lastProfile.userId}`);
+    }
     // 内存中保留当前的 interviews/messages，不清空本地存储，便于下次登录继续
   };
 
@@ -810,8 +844,10 @@ export default function App() {
           setViewMode(mode);
           setCurrentStep(mode === 'upload' ? 2 : 3);
           // 持久化当前选择
-          if (currentUserProfile) {
+          if (currentUserProfile && !isDemoUser) {
             localStorage.setItem(`interreview_selectedInterview_${currentUserProfile.userId}`, id);
+          } else if (currentUserProfile && isDemoUser) {
+            localStorage.removeItem(`interreview_selectedInterview_${currentUserProfile.userId}`);
           }
         }}
         onInterviewRename={renameInterview}

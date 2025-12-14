@@ -1,0 +1,16 @@
+{
+  "2": [
+    {
+      "id": "demo-msg-1",
+      "role": "user",
+      "content": "请帮我总结下这次面试的亮点。",
+      "timestamp": "2024-03-15T15:15:00Z"
+    },
+    {
+      "id": "demo-msg-2",
+      "role": "assistant",
+      "content": "亮点主要体现在对 React 性能治理的经验、对复杂组件的抽象能力以及沟通表达的清晰度。",
+      "timestamp": "2024-03-15T15:15:10Z"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+[
+  {
+    "id": "1",
+    "title": "未命名面试 48",
+    "company": "未知公司",
+    "position": "未知岗位",
+    "status": "待上传",
+    "date": "2025-12-08T14:30:00Z",
+    "createdAt": "2025-12-05T09:15:00Z",
+    "updatedAt": "2025-12-05T09:15:00Z"
+  },
+  {
+    "id": "2",
+    "title": "字节跳动前端一面",
+    "company": "字节跳动",
+    "position": "前端开发工程师",
+    "status": "已完成",
+    "date": "2024-03-15T14:00:00Z",
+    "createdAt": "2024-03-15T14:00:00Z",
+    "updatedAt": "2024-03-15T15:10:00Z",
+    "fileUrl": "",
+    "fileType": "audio/mpeg",
+    "durationSeconds": 2538,
+    "durationText": "42分18秒",
+    "transcriptText": "面试官：简单介绍一下你的背景。\n候选人：我是主要聚焦 React/TypeScript 的前端开发，负责过性能治理和可视化项目。\n面试官：项目中遇到的性能瓶颈是什么？\n候选人：我们使用虚拟列表配合增量渲染，将首屏时间压缩了 40%。"
+  },
+  {
+    "id": "3",
+    "title": "腾讯技术面",
+    "company": "腾讯",
+    "position": "后端开发",
+    "status": "已完成",
+    "date": "2025-12-03T10:30:00Z",
+    "createdAt": "2025-12-02T08:20:00Z",
+    "updatedAt": "2025-12-02T10:05:00Z",
+    "durationText": "36分12秒"
+  },
+  {
+    "id": "4",
+    "title": "阿里巴巴二面",
+    "company": "阿里巴巴",
+    "position": "算法工程师",
+    "status": "已完成",
+    "date": "2025-12-01T16:00:00Z",
+    "createdAt": "2025-11-29T11:00:00Z",
+    "updatedAt": "2025-11-29T11:55:00Z",
+    "durationText": "48分09秒"
+  }
+]

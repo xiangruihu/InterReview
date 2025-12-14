@@ -5,6 +5,12 @@ class Settings(BaseSettings):
     DASHSCOPE_API_KEY: str = ""
     SILICONFLOW_API_KEY: str = ""
 
+    # Demo account
+    DEMO_USER_EMAIL: str = "demo@example.com"
+    DEMO_USER_PASSWORD: str = "demo123"
+    DEMO_USER_ID: str = "demo-user"
+    DEMO_DATA_TEMPLATE_DIR: str = "./data/demo_template"
+
     # File Storage
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE: int = 200 * 1024 * 1024  # 200MB

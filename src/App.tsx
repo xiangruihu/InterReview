@@ -2,7 +2,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { StepProgress } from './components/StepProgress';
 import { ChatArea } from './components/ChatArea';
-import { UploadArea } from './components/UploadArea';
+import { UploadArea, type UploadUIState } from './components/UploadArea';
 import { AnalysisReport } from './components/AnalysisReport';
 import { ChatReport } from './components/ChatReport';
 import { ChatInput } from './components/ChatInput';
@@ -79,6 +79,10 @@ const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
   error: null,
 };
 
+const DEFAULT_UPLOAD_UI_STATE: UploadUIState = {
+  stage: 'idle',
+};
+
 export default function App() {
   // Default demo interviews
   const getDefaultInterviews = useCallback((): InterviewData[] => {
@@ -152,6 +156,7 @@ export default function App() {
   const [transcriptStates, setTranscriptStates] = useState<Record<string, TranscriptPanelState>>({});
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
   const [isAITypingByInterview, setIsAITypingByInterview] = useState<ByInterview<boolean>>({});
+  const [uploadUIByInterview, setUploadUIByInterview] = useState<ByInterview<UploadUIState>>({});
   
   // Interview data state - Load from localStorage
   const [interviews, setInterviews] = useState<InterviewData[]>(() => getDefaultInterviews());
@@ -165,6 +170,36 @@ export default function App() {
   const analysisRequestVersionRef = useRef<Record<string, number>>({});
   const chatRequestVersionRef = useRef<Record<string, number>>({});
   const chatAbortControllerRef = useRef<Record<string, AbortController | null>>({});
+  const patchUploadUIState = useCallback(
+    (interviewId: string | undefined, patch: Partial<UploadUIState>) => {
+      if (!interviewId) return;
+      setUploadUIByInterview((prev) => {
+        const previous = prev[interviewId] ?? DEFAULT_UPLOAD_UI_STATE;
+        const nextState: UploadUIState = { ...previous, ...patch };
+        if (IS_DEV) {
+          console.debug('[UploadUI] patch', {
+            targetInterviewId: interviewId,
+            currentInterviewId: selectedInterviewIdRef.current,
+            stage: nextState.stage,
+          });
+        }
+        return {
+          ...prev,
+          [interviewId]: nextState,
+        };
+      });
+    },
+    []
+  );
+  const clearUploadUIState = useCallback((interviewId: string | undefined) => {
+    if (!interviewId) return;
+    setUploadUIByInterview((prev) => {
+      if (!(interviewId in prev)) return prev;
+      const next = { ...prev };
+      delete next[interviewId];
+      return next;
+    });
+  }, []);
 
   const getDefaultViewMode = useCallback((interview?: InterviewData | null): ViewMode => {
     return interview?.status === '已完成' ? 'report' : 'upload';
@@ -175,6 +210,25 @@ export default function App() {
     if (interview.status === '待上传') return 1;
     if (interview.status === '上传中' || interview.status === '已上传文件') return 2;
     return 3;
+  }, []);
+  const getDerivedUploadUIState = useCallback((interview?: InterviewData | null): UploadUIState => {
+    if (!interview) return DEFAULT_UPLOAD_UI_STATE;
+    if (interview.status === '上传中') {
+      return {
+        stage: 'uploading',
+        fileName: interview.fileUrl?.split('/').pop() ?? undefined,
+      };
+    }
+    if (interview.fileUrl) {
+      return {
+        stage: 'uploaded',
+        fileName: interview.fileUrl.split('/').pop() ?? undefined,
+      };
+    }
+    if (['已上传文件', '分析中', '已完成', '分析失败'].includes(interview.status)) {
+      return { stage: 'uploaded' };
+    }
+    return DEFAULT_UPLOAD_UI_STATE;
   }, []);
 
   const setInterviewViewMode = useCallback((id: string | undefined | null, mode: ViewMode) => {
@@ -677,6 +731,7 @@ export default function App() {
       delete copy[id];
       return copy;
     });
+    clearUploadUIState(id);
 
     clearUploadTask(id);
     clearAnalysisTask(id);
@@ -954,6 +1009,7 @@ export default function App() {
     setViewModeByInterview({});
     setStepByInterview({});
     setIsAITypingByInterview({});
+    setUploadUIByInterview({});
     abortAllChatStreams();
     chatRequestVersionRef.current = {};
     analysisRequestVersionRef.current = {};
@@ -1080,6 +1136,9 @@ export default function App() {
   const currentMessages = selectedInterviewId ? interviewMessages[selectedInterviewId] || [] : [];
   const currentAnalysis = selectedInterviewId ? analysisResults[selectedInterviewId] : undefined;
   const currentTranscriptPanelState = currentInterview ? transcriptStates[currentInterview.id] : undefined;
+  const currentUploadUIState =
+    (selectedInterviewId ? uploadUIByInterview[selectedInterviewId] : undefined) ??
+    getDerivedUploadUIState(currentInterview);
   const currentViewMode: ViewMode = currentInterview
     ? (selectedInterviewId ? viewModeByInterview[selectedInterviewId] : undefined) ??
       getDefaultViewMode(currentInterview)
@@ -1191,6 +1250,7 @@ export default function App() {
                   interviewFileUrl={currentInterview?.fileUrl}
                   uploadTask={uploadTasks[selectedInterviewId]}
                   transcriptState={currentTranscriptPanelState}
+                  uploadUIState={currentUploadUIState}
                   onTranscriptStateChange={updateTranscriptPanelState}
                   onUploadStart={beginUploadTask}
                   onUploadError={failUploadTask}
@@ -1198,6 +1258,7 @@ export default function App() {
                   onStartAnalysis={handleStartAnalysis}
                   initialTranscript={currentInterview?.transcriptText}
                   onTranscriptUpdate={handleTranscriptUpdate}
+                  onPatchUploadUI={patchUploadUIState}
                 />
               </>
             ) : (

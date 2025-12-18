@@ -101,6 +101,18 @@ const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
   error: null,
 };
 
+export type UploadUIStage = 'idle' | 'uploading' | 'uploaded';
+
+export interface UploadUIState {
+  stage: UploadUIStage;
+  fileName?: string;
+  fileSize?: number;
+}
+
+const DEFAULT_UPLOAD_UI_STATE: UploadUIState = {
+  stage: 'idle',
+};
+
 interface UploadAreaProps {
   userId?: string;
   interviewId?: string;
@@ -110,12 +122,14 @@ interface UploadAreaProps {
   initialTranscript?: string;
   uploadTask?: UploadTaskState;
   transcriptState?: TranscriptPanelState;
+  uploadUIState?: UploadUIState;
   onTranscriptStateChange?: (interviewId: string, changes: Partial<TranscriptPanelState>) => void;
   onUploadStart?: (info: { interviewId: string; fileName: string; previousStatus?: InterviewStatus }) => void;
   onUploadError?: (info: { interviewId: string; error?: string }) => void;
   onUploadComplete?: (info: { interviewId: string; fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => void;
   onStartAnalysis?: () => void;
   onTranscriptUpdate?: (interviewId: string, text: string) => void;
+  onPatchUploadUI?: (interviewId: string, patch: Partial<UploadUIState>) => void;
 }
 
 export function UploadArea({
@@ -127,15 +141,16 @@ export function UploadArea({
   initialTranscript,
   uploadTask,
   transcriptState,
+  uploadUIState,
   onTranscriptStateChange,
   onUploadStart,
   onUploadError,
   onUploadComplete,
   onStartAnalysis,
   onTranscriptUpdate,
+  onPatchUploadUI,
 }: UploadAreaProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [displayProgress, setDisplayProgress] = useState(() =>
     computeTaskProgress(uploadTask, {
       config: DEFAULT_UPLOAD_PROGRESS_CONFIG,
@@ -158,6 +173,39 @@ export function UploadArea({
     },
     [onTranscriptStateChange]
   );
+  const patchUploadUIState = useCallback(
+    (targetInterviewId: string | undefined, patch: Partial<UploadUIState>) => {
+      if (!targetInterviewId) return;
+      onPatchUploadUI?.(targetInterviewId, patch);
+    },
+    [onPatchUploadUI]
+  );
+
+  const fallbackUploadState: UploadUIState = (() => {
+    if (interviewStatus === '上传中') {
+      return {
+        stage: 'uploading',
+        fileName: interviewFileUrl ? interviewFileUrl.split('/').pop() ?? undefined : undefined,
+      };
+    }
+
+    if (interviewFileUrl) {
+      return {
+        stage: 'uploaded',
+        fileName: interviewFileUrl.split('/').pop() ?? undefined,
+      };
+    }
+
+    if (['已上传文件', '分析中', '已完成', '分析失败'].includes(interviewStatus || '')) {
+      return { stage: 'uploaded' };
+    }
+
+    return DEFAULT_UPLOAD_UI_STATE;
+  })();
+  const resolvedUploadUIState = uploadUIState ?? fallbackUploadState;
+  const displayFileName = uploadUIState?.fileName ?? fallbackUploadState.fileName;
+  const displayFileSize = uploadUIState?.fileSize;
+  const hasUploaded = resolvedUploadUIState.stage === 'uploaded' || Boolean(interviewFileUrl);
 
   useEffect(() => {
     if (!uploadTask) {
@@ -247,6 +295,11 @@ export function UploadArea({
     }
 
     try {
+      patchUploadUIState(targetInterviewId, {
+        stage: 'uploading',
+        fileName: file.name,
+        fileSize: file.size,
+      });
       onUploadStart?.({
         interviewId: targetInterviewId,
         fileName: file.name,
@@ -259,10 +312,12 @@ export function UploadArea({
         durationPromise,
       ]);
       const durationText = formatDuration(durationSeconds ?? undefined);
-      if (interviewId === targetInterviewId) {
-        setUploadedFile(file);
-      }
       toast.success(`「${file.name}」上传成功`);
+      patchUploadUIState(targetInterviewId, {
+        stage: 'uploaded',
+        fileName: file.name,
+        fileSize: file.size,
+      });
       onUploadComplete?.({
         interviewId: targetInterviewId,
         fileName: file.name,
@@ -292,6 +347,7 @@ export function UploadArea({
     } catch (error) {
       const message = error instanceof Error ? error.message : '上传失败，请稍后重试';
       onUploadError?.({ interviewId: targetInterviewId, error: message });
+      patchUploadUIState(targetInterviewId, { stage: 'idle' });
       toast.error('上传失败', { description: message });
     }
   };
@@ -332,7 +388,7 @@ export function UploadArea({
 
   // Start analysis
   const handleStartAnalysis = () => {
-    if (!uploadedFile && !interviewFileUrl) {
+    if (!hasUploaded) {
       toast.error('请先上传文件');
       return;
     }
@@ -361,7 +417,7 @@ export function UploadArea({
       return;
     }
 
-    if (!uploadedFile && !interviewFileUrl) {
+    if (!hasUploaded) {
       toast.error('请先上传文件');
       return;
     }
@@ -440,20 +496,14 @@ export function UploadArea({
   }, [userId, interviewId, initialTranscript, onTranscriptUpdate, patchTranscriptState]);
 
   const existingFileName =
-    uploadedFile?.name ||
+    displayFileName ||
     (interviewFileUrl ? interviewFileUrl.split('/').pop() || '已上传的文件' : null);
-
-  const hasUploaded = Boolean(uploadedFile || interviewFileUrl);
   const isUploadInProgress = uploadTask?.status === 'running';
   const shouldShowProgressBar =
     !!uploadTask &&
     ((uploadTask.status === 'running') ||
       (uploadTask.status === 'success' && displayProgress < 100));
   const progressLabel = Math.min(100, Math.max(0, Math.round(displayProgress)));
-
-  useEffect(() => {
-    setUploadedFile(null);
-  }, [userId, interviewId]);
 
   return (
     <div className="space-y-6">
@@ -546,12 +596,12 @@ export function UploadArea({
                   <div className="text-sm text-gray-900">
                     {existingFileName || '已上传的文件'}
                   </div>
-                  {uploadedFile && (
+                  {typeof displayFileSize === 'number' && (
                     <div className="text-xs text-gray-500">
-                      {formatFileSize(uploadedFile.size)}
+                      {formatFileSize(displayFileSize)}
                     </div>
                   )}
-                  {!uploadedFile && interviewFileUrl && (
+                  {typeof displayFileSize !== 'number' && interviewFileUrl && (
                     <div className="text-xs text-gray-500">
                       来自服务器的已上传文件
                     </div>

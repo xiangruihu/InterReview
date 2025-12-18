@@ -12,3 +12,10 @@ export interface StagedTaskState {
 
 export type UploadTaskState = StagedTaskState;
 export type AnalysisTaskState = StagedTaskState;
+
+export interface TaskProgressState {
+  percent: number;
+  stage: 'uploading' | 'transcribing' | 'analyzing';
+  message?: string;
+  updatedAt: number;
+}

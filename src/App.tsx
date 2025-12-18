@@ -19,8 +19,9 @@ import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnal
 import type { TranscriptChunk } from './utils/backend';
 import { getMockAnalysisData } from './utils/mockAnalysis';
 import type { AnalysisData } from './types/analysis';
-import type { UploadTaskState, AnalysisTaskState } from './types/uploads';
+import type { UploadTaskState, AnalysisTaskState, TaskProgressState } from './types/uploads';
 import { computeStagedProgressValue } from './hooks/useStagedProgress';
+import { computeTaskProgress, shouldAnimateTaskProgress } from './utils/stagedTaskProgress';
 import {
   DEFAULT_UPLOAD_COMPLETION_DURATION,
   DEFAULT_UPLOAD_PROGRESS_CONFIG,
@@ -89,6 +90,11 @@ const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
 
 const DEFAULT_UPLOAD_UI_STATE: UploadUIState = {
   stage: 'idle',
+};
+
+const clampPercent = (value: number): number => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, Math.round(value)));
 };
 
 export default function App() {
@@ -165,6 +171,8 @@ export default function App() {
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
   const [isAITypingByInterview, setIsAITypingByInterview] = useState<ByInterview<boolean>>({});
   const [uploadUIByInterview, setUploadUIByInterview] = useState<ByInterview<UploadUIState>>({});
+  const [uploadProgressByInterview, setUploadProgressByInterview] = useState<ByInterview<TaskProgressState>>({});
+  const [analysisProgressByInterview, setAnalysisProgressByInterview] = useState<ByInterview<TaskProgressState>>({});
   
   // Interview data state - Load from localStorage
   const [interviews, setInterviews] = useState<InterviewData[]>(() => getDefaultInterviews());
@@ -441,6 +449,12 @@ export default function App() {
       delete next[interviewId];
       return next;
     });
+    setUploadProgressByInterview((prev) => {
+      if (!(interviewId in prev)) return prev;
+      const next = { ...prev };
+      delete next[interviewId];
+      return next;
+    });
     delete uploadPreviousStatusRef.current[interviewId];
   }, []);
 
@@ -498,11 +512,135 @@ export default function App() {
       delete next[interviewId];
       return next;
     });
+    setAnalysisProgressByInterview((prev) => {
+      if (!(interviewId in prev)) return prev;
+      const next = { ...prev };
+      delete next[interviewId];
+      return next;
+    });
   }, []);
 
   useEffect(() => {
     selectedInterviewIdRef.current = selectedInterviewId;
   }, [selectedInterviewId]);
+
+  useEffect(() => {
+    let raf: number | null = null;
+    let cancelled = false;
+
+    const tick = () => {
+      if (cancelled) return;
+      const now = Date.now();
+      setUploadProgressByInterview((prev) => {
+        const ids = Object.keys(uploadTasks);
+        let changed = ids.length !== Object.keys(prev).length;
+        const next: ByInterview<TaskProgressState> = {};
+        ids.forEach((interviewId) => {
+          const task = uploadTasks[interviewId];
+          if (!task) return;
+          const percent = clampPercent(
+            computeTaskProgress(task, {
+              config: DEFAULT_UPLOAD_PROGRESS_CONFIG,
+              completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
+              now,
+            })
+          );
+          const prevState = prev[interviewId];
+          if (!prevState || prevState.percent !== percent || prevState.stage !== 'uploading') {
+            changed = true;
+            next[interviewId] = {
+              percent,
+              stage: 'uploading',
+              updatedAt: now,
+            };
+          } else {
+            next[interviewId] = prevState;
+          }
+        });
+        return changed ? next : prev;
+      });
+
+      const shouldContinue = Object.values(uploadTasks).some((task) =>
+        shouldAnimateTaskProgress(task, {
+          completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
+          now,
+        })
+      );
+      if (shouldContinue) {
+        raf = window.requestAnimationFrame(tick);
+      } else {
+        raf = null;
+      }
+    };
+
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+    };
+  }, [uploadTasks]);
+
+  useEffect(() => {
+    let raf: number | null = null;
+    let cancelled = false;
+
+    const tick = () => {
+      if (cancelled) return;
+      const now = Date.now();
+      setAnalysisProgressByInterview((prev) => {
+        const ids = Object.keys(analysisTasks);
+        let changed = ids.length !== Object.keys(prev).length;
+        const next: ByInterview<TaskProgressState> = {};
+        ids.forEach((interviewId) => {
+          const task = analysisTasks[interviewId];
+          if (!task) return;
+          const percent = clampPercent(
+            computeTaskProgress(task, {
+              config: DEFAULT_ANALYSIS_PROGRESS_CONFIG,
+              completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
+              now,
+            })
+          );
+          const prevState = prev[interviewId];
+          if (!prevState || prevState.percent !== percent || prevState.stage !== 'analyzing') {
+            changed = true;
+            next[interviewId] = {
+              percent,
+              stage: 'analyzing',
+              updatedAt: now,
+            };
+          } else {
+            next[interviewId] = prevState;
+          }
+        });
+        return changed ? next : prev;
+      });
+
+      const shouldContinue = Object.values(analysisTasks).some((task) =>
+        shouldAnimateTaskProgress(task, {
+          completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
+          now,
+        })
+      );
+      if (shouldContinue) {
+        raf = window.requestAnimationFrame(tick);
+      } else {
+        raf = null;
+      }
+    };
+
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+    };
+  }, [analysisTasks]);
 
   useEffect(() => {
     if (!analysisCompletionTargetId) return;
@@ -1187,6 +1325,10 @@ export default function App() {
   const currentUploadUIState =
     (selectedInterviewId ? uploadUIByInterview[selectedInterviewId] : undefined) ??
     getDerivedUploadUIState(currentInterview);
+  const currentUploadProgressPercent =
+    (selectedInterviewId && uploadProgressByInterview[selectedInterviewId]?.percent) || 0;
+  const currentAnalysisProgressPercent =
+    (currentInterview?.id && analysisProgressByInterview[currentInterview.id]?.percent) || 0;
   const currentViewMode: ViewMode = currentInterview
     ? (selectedInterviewId ? viewModeByInterview[selectedInterviewId] : undefined) ??
       getDefaultViewMode(currentInterview)
@@ -1259,6 +1401,7 @@ export default function App() {
               <AnalyzingLoader
                 interviewName={currentInterview?.title}
                 task={currentInterview?.id ? analysisTasks[currentInterview.id] : undefined}
+                progressPercent={currentAnalysisProgressPercent}
                 onVisualComplete={() => {
                   if (!currentInterview) return;
                   updateInterview(currentInterview.id, { status: '已完成' });
@@ -1299,6 +1442,7 @@ export default function App() {
                   uploadTask={uploadTasks[selectedInterviewId]}
                   transcriptState={currentTranscriptPanelState}
                   uploadUIState={currentUploadUIState}
+                  progressPercent={currentUploadProgressPercent}
                   onTranscriptStateChange={updateTranscriptPanelState}
                   onUploadStart={beginUploadTask}
                   onUploadError={failUploadTask}

@@ -15,8 +15,6 @@ import type { TranscriptChunk, TranscriptPayload } from '../utils/backend';
 import type { InterviewStatus } from '../utils/backend';
 import { formatDuration } from '../utils/time';
 import type { UploadTaskState } from '../types/uploads';
-import { computeTaskProgress, shouldAnimateTaskProgress } from '../utils/stagedTaskProgress';
-import { DEFAULT_UPLOAD_COMPLETION_DURATION, DEFAULT_UPLOAD_PROGRESS_CONFIG } from '../constants/progress';
 
 const MEDIA_DURATION_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.mp4'];
 const TEXT_EXTENSIONS = ['.txt'];
@@ -140,6 +138,7 @@ interface UploadAreaProps {
   uploadTask?: UploadTaskState;
   transcriptState?: TranscriptPanelState;
   uploadUIState?: UploadUIState;
+  progressPercent?: number;
   onTranscriptStateChange?: (interviewId: string, changes: Partial<TranscriptPanelState>) => void;
   onUploadStart?: (info: { interviewId: string; fileName: string; previousStatus?: InterviewStatus }) => void;
   onUploadError?: (info: { interviewId: string; error?: string }) => void;
@@ -159,6 +158,7 @@ export function UploadArea({
   uploadTask,
   transcriptState,
   uploadUIState,
+  progressPercent,
   onTranscriptStateChange,
   onUploadStart,
   onUploadError,
@@ -168,11 +168,9 @@ export function UploadArea({
   onPatchUploadUI,
 }: UploadAreaProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [displayProgress, setDisplayProgress] = useState(() =>
-    computeTaskProgress(uploadTask, {
-      config: DEFAULT_UPLOAD_PROGRESS_CONFIG,
-      completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
-    })
+  const normalizedProgress = Math.min(
+    100,
+    Math.max(0, typeof progressPercent === 'number' ? Math.round(progressPercent) : 0)
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resolvedTranscriptState = transcriptState ?? DEFAULT_TRANSCRIPT_PANEL_STATE;
@@ -295,42 +293,6 @@ export function UploadArea({
   const displayFileName = uploadUIState?.fileName ?? fallbackUploadState.fileName;
   const displayFileSize = uploadUIState?.fileSize;
   const hasUploaded = resolvedUploadUIState.stage === 'uploaded' || Boolean(interviewFileUrl);
-
-  useEffect(() => {
-    if (!uploadTask) {
-      setDisplayProgress(0);
-      return;
-    }
-
-    let raf: number | null = null;
-    let cancelled = false;
-
-    const update = () => {
-      if (cancelled) return;
-      setDisplayProgress(
-        computeTaskProgress(uploadTask, {
-          config: DEFAULT_UPLOAD_PROGRESS_CONFIG,
-          completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
-        })
-      );
-      if (
-        shouldAnimateTaskProgress(uploadTask, {
-          completionDuration: DEFAULT_UPLOAD_COMPLETION_DURATION,
-        })
-      ) {
-        raf = window.requestAnimationFrame(update);
-      }
-    };
-
-    update();
-
-    return () => {
-      cancelled = true;
-      if (raf) {
-        window.cancelAnimationFrame(raf);
-      }
-    };
-  }, [uploadTask]);
 
   // Supported file types
   const supportedTypes = [
@@ -632,9 +594,9 @@ export function UploadArea({
   const isUploadInProgress = uploadTask?.status === 'running';
   const shouldShowProgressBar =
     !!uploadTask &&
-    ((uploadTask.status === 'running') ||
-      (uploadTask.status === 'success' && displayProgress < 100));
-  const progressLabel = Math.min(100, Math.max(0, Math.round(displayProgress)));
+    (uploadTask.status === 'running' ||
+      (uploadTask.status === 'success' && normalizedProgress < 100));
+  const progressLabel = normalizedProgress;
 
   return (
     <div className="space-y-6">
@@ -778,7 +740,7 @@ export function UploadArea({
             <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
               <div
                 className="h-full bg-blue-600 transition-all duration-300"
-                style={{ width: `${Math.min(100, Math.max(0, displayProgress))}%` }}
+                style={{ width: `${normalizedProgress}%` }}
               ></div>
             </div>
           </div>

@@ -1,28 +1,23 @@
 import { Sparkles, Loader2, FileAudio, Brain, ListChecks } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { AnalysisTaskState } from '../types/uploads';
-import { computeTaskProgress, shouldAnimateTaskProgress } from '../utils/stagedTaskProgress';
-import {
-  DEFAULT_ANALYSIS_COMPLETION_DURATION,
-  DEFAULT_ANALYSIS_PROGRESS_CONFIG,
-} from '../constants/progress';
 
 interface AnalyzingLoaderProps {
   interviewName?: string;
   task?: AnalysisTaskState;
+  progressPercent?: number;
   onVisualComplete?: () => void;
 }
 
 export function AnalyzingLoader({
   interviewName = '面试录音',
   task,
+  progressPercent,
   onVisualComplete,
 }: AnalyzingLoaderProps) {
-  const [progress, setProgress] = useState(() =>
-    computeTaskProgress(task, {
-      config: DEFAULT_ANALYSIS_PROGRESS_CONFIG,
-      completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
-    })
+  const clampedProgress = Math.min(
+    100,
+    Math.max(0, typeof progressPercent === 'number' ? Math.round(progressPercent) : 0)
   );
   const completionNotifiedRef = useRef(false);
 
@@ -51,58 +46,22 @@ export function AnalyzingLoader({
   );
 
   useEffect(() => {
-    if (!task) {
-      setProgress(0);
-      return;
-    }
-
-    let raf: number | null = null;
-    let cancelled = false;
-
-    const update = () => {
-      if (cancelled) return;
-      setProgress(
-        computeTaskProgress(task, {
-          config: DEFAULT_ANALYSIS_PROGRESS_CONFIG,
-          completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
-        })
-      );
-      if (
-        shouldAnimateTaskProgress(task, {
-          completionDuration: DEFAULT_ANALYSIS_COMPLETION_DURATION,
-        })
-      ) {
-        raf = window.requestAnimationFrame(update);
-      }
-    };
-
-    update();
-
-    return () => {
-      cancelled = true;
-      if (raf) {
-        window.cancelAnimationFrame(raf);
-      }
-    };
-  }, [task]);
-
-  useEffect(() => {
     completionNotifiedRef.current = false;
   }, [task?.startedAt]);
 
   useEffect(() => {
     if (!task || task.status !== 'success') return;
-    if (progress < 100) return;
+    if (clampedProgress < 100) return;
     if (completionNotifiedRef.current) return;
     completionNotifiedRef.current = true;
     onVisualComplete?.();
-  }, [task, progress, onVisualComplete]);
+  }, [task, clampedProgress, onVisualComplete]);
 
   const currentStep = useMemo(() => {
-    if (progress < 50) return 0;
-    if (progress < 80) return 1;
+    if (clampedProgress < 50) return 0;
+    if (clampedProgress < 80) return 1;
     return 2;
-  }, [progress]);
+  }, [clampedProgress]);
 
   return (
     <div className="flex items-center justify-center min-h-[60vh]">
@@ -125,13 +84,13 @@ export function AnalyzingLoader({
           <div className="mb-8">
             <div className="flex items-center justify-between text-sm mb-2">
               <span className="text-gray-600">分析进度</span>
-              <span className="text-blue-600">{Math.round(progress)}%</span>
+              <span className="text-blue-600">{clampedProgress}%</span>
             </div>
             <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
               <div 
                 className="h-full bg-gradient-to-r from-blue-500 to-blue-600 relative"
                 style={{ 
-                  width: `${progress}%`,
+                  width: `${clampedProgress}%`,
                   transition: 'width 0.05s linear'
                 }}
               >

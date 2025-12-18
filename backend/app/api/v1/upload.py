@@ -51,11 +51,16 @@ async def upload_interview_file(
     # 保存文件
     file_id = str(uuid.uuid4())
     file_path = upload_dir / f"{file_id}{file_ext}"
+    try:
+        storage.update_interview(user_id, interview_id, {"status": "上传中"})
+    except Exception as status_error:
+        logger.warning("预更新面试状态失败 user=%s interview=%s err=%s", user_id, interview_id, status_error)
 
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
+        storage.update_interview(user_id, interview_id, {"status": "待上传"})
         raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
     finally:
         file.file.close()
@@ -92,7 +97,7 @@ async def upload_interview_file(
                 user_id,
                 interview_id,
                 {
-                    "status": "转录完成",
+                    "status": "已上传文件",
                     "transcriptText": transcript_text
                 }
             )

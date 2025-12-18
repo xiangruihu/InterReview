@@ -11,6 +11,7 @@ import {
 import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner@2.0.3';
 import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../utils/backend';
+import type { InterviewStatus } from '../utils/backend';
 import { formatDuration } from '../utils/time';
 import type { UploadTaskState } from '../types/uploads';
 import { computeTaskProgress, shouldAnimateTaskProgress } from '../utils/stagedTaskProgress';
@@ -88,11 +89,11 @@ interface UploadAreaProps {
   userId?: string;
   interviewId?: string;
   interviewTitle?: string;
-  interviewStatus?: string;
+  interviewStatus?: InterviewStatus;
   interviewFileUrl?: string;
   initialTranscript?: string;
   uploadTask?: UploadTaskState;
-  onUploadStart?: (info: { interviewId: string; fileName: string }) => void;
+  onUploadStart?: (info: { interviewId: string; fileName: string; previousStatus?: InterviewStatus }) => void;
   onUploadError?: (info: { interviewId: string; error?: string }) => void;
   onUploadComplete?: (info: { interviewId: string; fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => void;
   onStartAnalysis?: () => void;
@@ -216,7 +217,11 @@ export function UploadArea({
     }
 
     try {
-      onUploadStart?.({ interviewId: targetInterviewId, fileName: file.name });
+      onUploadStart?.({
+        interviewId: targetInterviewId,
+        fileName: file.name,
+        previousStatus: interviewStatus,
+      });
       const isTextFile = isTextTranscriptFile(file);
       const durationPromise = getMediaDuration(file);
       const [result, durationSeconds] = await Promise.all([

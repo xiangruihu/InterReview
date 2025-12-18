@@ -7,7 +7,7 @@ class InterviewData(BaseModel):
     title: str
     company: str
     position: str
-    status: Literal['待上传', '已上传文件', '分析中', '已完成', '分析失败']
+    status: Literal['待上传', '上传中', '已上传文件', '分析中', '已完成', '分析失败']
     date: datetime
     createdAt: datetime
     updatedAt: datetime
@@ -25,4 +25,4 @@ class InterviewUpdate(BaseModel):
     title: Optional[str] = None
     company: Optional[str] = None
     position: Optional[str] = None
-    status: Optional[Literal['待上传', '分析中', '已完成', '分析失败']] = None
+    status: Optional[Literal['待上传', '上传中', '已上传文件', '分析中', '已完成', '分析失败']] = None

@@ -42,7 +42,7 @@ interface InterviewData {
   title: string;
   company: string;
   position: string;
-  status: '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
+  status: '待上传' | '上传中' | '已上传文件' | '分析中' | '已完成' | '分析失败';
   date: string;
   fileUrl?: string;
   fileType?: string;
@@ -140,6 +140,7 @@ export default function App() {
   const [analysisCompletionTargetId, setAnalysisCompletionTargetId] = useState<string | null>(null);
   const selectedInterviewIdRef = useRef(selectedInterviewId);
   const abortedAnalysisIdsRef = useRef<Set<string>>(new Set());
+  const uploadPreviousStatusRef = useRef<Record<string, InterviewData['status']>>({});
 
   const setSelectedInterviewId = useCallback((id: string) => {
     selectedInterviewIdRef.current = id;
@@ -152,16 +153,27 @@ export default function App() {
     );
   }, []);
 
-  const beginUploadTask = useCallback((info: { interviewId: string; fileName: string }) => {
+  const beginUploadTask = useCallback((info: { interviewId: string; fileName: string; previousStatus?: InterviewData['status'] }) => {
     if (!info.interviewId) return;
+    const { interviewId, fileName, previousStatus } = info;
     setUploadTasks((prev) => ({
       ...prev,
-      [info.interviewId]: {
+      [interviewId]: {
         status: 'running',
-        fileName: info.fileName,
+        fileName,
         startedAt: Date.now(),
       },
     }));
+
+    setInterviews((prev) =>
+      prev.map((interview) => {
+        if (interview.id !== interviewId) return interview;
+        if (uploadPreviousStatusRef.current[interviewId] === undefined) {
+          uploadPreviousStatusRef.current[interviewId] = previousStatus || interview.status;
+        }
+        return { ...interview, status: '上传中' };
+      })
+    );
   }, []);
 
   const completeUploadTaskState = useCallback((interviewId: string) => {
@@ -198,6 +210,16 @@ export default function App() {
         error: info.error,
       },
     }));
+    setInterviews((prev) =>
+      prev.map((interview) => {
+        if (interview.id !== info.interviewId) return interview;
+        const previousStatus =
+          uploadPreviousStatusRef.current[info.interviewId] ||
+          (interview.status === '上传中' ? '待上传' : interview.status);
+        return { ...interview, status: previousStatus };
+      })
+    );
+    delete uploadPreviousStatusRef.current[info.interviewId];
   }, []);
 
   const clearUploadTask = useCallback((interviewId: string) => {
@@ -207,6 +229,7 @@ export default function App() {
       delete next[interviewId];
       return next;
     });
+    delete uploadPreviousStatusRef.current[interviewId];
   }, []);
 
   const beginAnalysisTask = useCallback((interviewId: string) => {
@@ -585,6 +608,7 @@ export default function App() {
       durationSeconds: info.durationSeconds,
       durationText: info.durationText,
     });
+    delete uploadPreviousStatusRef.current[info.interviewId];
     toast.success(`「${info.fileName}」上传完成`);
   };
 

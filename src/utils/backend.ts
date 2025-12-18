@@ -46,7 +46,7 @@ export interface LoginPayload {
   password: string;
 }
 
-export type InterviewStatus = '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
+export type InterviewStatus = '待上传' | '上传中' | '已上传文件' | '分析中' | '已完成' | '分析失败';
 
 export interface InterviewDataDTO {
   id: string;

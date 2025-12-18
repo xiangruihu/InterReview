@@ -5,7 +5,7 @@ interface InterviewListItemProps {
   title: string;
   company: string;
   position: string;
-  status: '待上传' | '已上传文件' | '分析中' | '已完成' | '分析失败';
+  status: '待上传' | '上传中' | '已上传文件' | '分析中' | '已完成' | '分析失败';
   date: string;
   isActive: boolean;
   onRename?: (newTitle: string) => void;
@@ -24,6 +24,7 @@ export function InterviewListItem({
 }: InterviewListItemProps) {
   const statusColors: Record<string, string> = {
     '待上传': 'bg-gray-100 text-gray-700',
+    '上传中': 'bg-blue-100 text-blue-700',
     '已上传文件': 'bg-blue-100 text-blue-700',
     '分析中': 'bg-yellow-100 text-yellow-700',
     '已完成': 'bg-green-100 text-green-700',

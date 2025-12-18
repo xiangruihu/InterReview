@@ -67,7 +67,7 @@ pip install -r requirements.txt
 
 | 变量 | 用途 | 备注 |
 | --- | --- | --- |
-| `VITE_BACKEND_URL` | 前端调用后端的基础 URL | 默认为 `http://localhost:8000`，部署时指向网关/域名。 |
+| `VITE_API_BASE` | 前端调用后端的基础地址 | 默认为 `/api`（同域反代），本地开发可在 `.env` 中改成 `http://127.0.0.1:8000`。 |
 | `DASHSCOPE_API_KEY` | DashScope LLM 的唯一 Key | Vite 已配置暴露到前端，同时后端 `LLMService` / `llm.py` 也读取该值。 |
 | `SILICONFLOW_API_KEY` | SenseVoice 转写 Key | 被后端 `TranscriptionService`、`transcribe.py` 使用。 |
 | `MOCK_TRANSCRIPTION` | 转写 Mock 开关 | 任意 truthy 值代表强制走本地示例，便于开发。 |

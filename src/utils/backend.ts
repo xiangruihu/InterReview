@@ -1,9 +1,11 @@
 // 简易后端 API 客户端（FastAPI）
-// 读取环境变量 VITE_BACKEND_URL，默认 http://localhost:8000
+// 通过 .env 中的 VITE_API_BASE 配置 API 地址，默认走同域 /api 反代
 
 import type { AnalysisData } from '../types/analysis';
 
-export const BACKEND_BASE = (import.meta.env.VITE_BACKEND_URL as string) || 'http://localhost:8000';
+const rawApiBase = (import.meta.env.VITE_API_BASE as string) || '/api';
+const normalizedApiBase = rawApiBase.endsWith('/') ? rawApiBase.slice(0, -1) : rawApiBase;
+export const BACKEND_BASE = normalizedApiBase || '/api';
 
 type JsonMap = Record<string, any>;
 

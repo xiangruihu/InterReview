@@ -28,6 +28,10 @@ import {
 } from './constants/progress';
 
 const DEMO_USER_EMAIL = 'demo@example.com';
+type ViewMode = 'upload' | 'report';
+type StepValue = 1 | 2 | 3;
+type ByInterview<T> = Record<string, T>;
+const IS_DEV = import.meta.env?.DEV ?? false;
 
 // 用户档案模型
 interface UserProfile {
@@ -58,6 +62,22 @@ interface Message {
   timestamp: string;
   isStreaming?: boolean;
 }
+
+interface TranscriptPanelState {
+  text: string;
+  updatedAt: string | null;
+  isLoading: boolean;
+  isTranscribing: boolean;
+  error: string | null;
+}
+
+const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
+  text: '',
+  updatedAt: null,
+  isLoading: false,
+  isTranscribing: false,
+  error: null,
+};
 
 export default function App() {
   // Default demo interviews
@@ -116,8 +136,8 @@ export default function App() {
   );
 
   // Toggle between upload view and analysis report view
-  const [viewMode, setViewMode] = useState<'upload' | 'report'>('report');
-  const [currentStep, setCurrentStep] = useState(3);
+  const [viewModeByInterview, setViewModeByInterview] = useState<ByInterview<ViewMode>>({});
+  const [stepByInterview, setStepByInterview] = useState<ByInterview<StepValue>>({});
   const [selectedInterviewId, setSelectedInterviewIdState] = useState('2');
   
   // Delete confirmation dialog state
@@ -129,8 +149,9 @@ export default function App() {
   const [analysisResults, setAnalysisResults] = useState<Record<string, AnalysisData>>({});
   const [uploadTasks, setUploadTasks] = useState<Record<string, UploadTaskState>>({});
   const [analysisTasks, setAnalysisTasks] = useState<Record<string, AnalysisTaskState>>({});
+  const [transcriptStates, setTranscriptStates] = useState<Record<string, TranscriptPanelState>>({});
   const [hasLoadedRemoteData, setHasLoadedRemoteData] = useState(false);
-  const [isAITyping, setIsAITyping] = useState(false);
+  const [isAITypingByInterview, setIsAITypingByInterview] = useState<ByInterview<boolean>>({});
   
   // Interview data state - Load from localStorage
   const [interviews, setInterviews] = useState<InterviewData[]>(() => getDefaultInterviews());
@@ -141,6 +162,93 @@ export default function App() {
   const selectedInterviewIdRef = useRef(selectedInterviewId);
   const abortedAnalysisIdsRef = useRef<Set<string>>(new Set());
   const uploadPreviousStatusRef = useRef<Record<string, InterviewData['status']>>({});
+  const analysisRequestVersionRef = useRef<Record<string, number>>({});
+  const chatRequestVersionRef = useRef<Record<string, number>>({});
+  const chatAbortControllerRef = useRef<Record<string, AbortController | null>>({});
+
+  const getDefaultViewMode = useCallback((interview?: InterviewData | null): ViewMode => {
+    return interview?.status === '已完成' ? 'report' : 'upload';
+  }, []);
+
+  const getDefaultStep = useCallback((interview?: InterviewData | null): StepValue => {
+    if (!interview) return 1;
+    if (interview.status === '待上传') return 1;
+    if (interview.status === '上传中' || interview.status === '已上传文件') return 2;
+    return 3;
+  }, []);
+
+  const setInterviewViewMode = useCallback((id: string | undefined | null, mode: ViewMode) => {
+    if (!id) return;
+    setViewModeByInterview((prev) => ({
+      ...prev,
+      [id]: mode,
+    }));
+  }, []);
+
+  const setInterviewStep = useCallback((id: string | undefined | null, step: StepValue) => {
+    if (!id) return;
+    setStepByInterview((prev) => ({
+      ...prev,
+      [id]: step,
+    }));
+  }, []);
+
+  const setInterviewTypingState = useCallback((id: string | undefined | null, state: boolean) => {
+    if (!id) return;
+    setIsAITypingByInterview((prev) => ({
+      ...prev,
+      [id]: state,
+    }));
+  }, []);
+
+  const bumpAnalysisRequestVersion = useCallback((interviewId: string) => {
+    analysisRequestVersionRef.current[interviewId] =
+      (analysisRequestVersionRef.current[interviewId] ?? 0) + 1;
+    return analysisRequestVersionRef.current[interviewId];
+  }, []);
+
+  const isAnalysisRequestActive = useCallback(
+    (interviewId: string, version: number) =>
+      analysisRequestVersionRef.current[interviewId] === version,
+    []
+  );
+
+  const bumpChatRequestVersion = useCallback((interviewId: string) => {
+    chatRequestVersionRef.current[interviewId] =
+      (chatRequestVersionRef.current[interviewId] ?? 0) + 1;
+    return chatRequestVersionRef.current[interviewId];
+  }, []);
+
+  const isChatRequestActive = useCallback(
+    (interviewId: string, version: number) =>
+      chatRequestVersionRef.current[interviewId] === version,
+    []
+  );
+
+  const assignChatAbortController = useCallback(
+    (interviewId: string, controller: AbortController) => {
+      if (chatAbortControllerRef.current[interviewId]) {
+        chatAbortControllerRef.current[interviewId]?.abort();
+      }
+      chatAbortControllerRef.current[interviewId] = controller;
+    },
+    []
+  );
+
+  const clearChatAbortController = useCallback((interviewId: string) => {
+    const controller = chatAbortControllerRef.current[interviewId];
+    if (controller) {
+      controller.abort();
+      delete chatAbortControllerRef.current[interviewId];
+    }
+  }, []);
+
+  const abortAllChatStreams = useCallback(() => {
+    Object.keys(chatAbortControllerRef.current).forEach((key) => {
+      chatAbortControllerRef.current[key]?.abort();
+      delete chatAbortControllerRef.current[key];
+    });
+  }, []);
 
   const setSelectedInterviewId = useCallback((id: string) => {
     selectedInterviewIdRef.current = id;
@@ -151,6 +259,18 @@ export default function App() {
     setInterviews(prev =>
       prev.map((interview) => (interview.id === id ? { ...interview, ...data } : interview))
     );
+  }, []);
+
+  const updateTranscriptPanelState = useCallback((id: string, changes: Partial<TranscriptPanelState>) => {
+    if (!id) return;
+    setTranscriptStates((prev) => {
+      const prevState = prev[id] ?? DEFAULT_TRANSCRIPT_PANEL_STATE;
+      const nextState = { ...prevState, ...changes };
+      return {
+        ...prev,
+        [id]: nextState,
+      };
+    });
   }, []);
 
   const beginUploadTask = useCallback((info: { interviewId: string; fileName: string; previousStatus?: InterviewData['status'] }) => {
@@ -296,9 +416,18 @@ export default function App() {
     if (!analysisCompletionTargetId) return;
     if (currentInterview?.id === analysisCompletionTargetId) return;
     updateInterview(analysisCompletionTargetId, { status: '已完成' });
+    setInterviewViewMode(analysisCompletionTargetId, 'report');
+    setInterviewStep(analysisCompletionTargetId, 3);
     clearAnalysisTask(analysisCompletionTargetId);
     setAnalysisCompletionTargetId(null);
-  }, [analysisCompletionTargetId, currentInterview?.id, updateInterview, clearAnalysisTask]);
+  }, [
+    analysisCompletionTargetId,
+    currentInterview?.id,
+    updateInterview,
+    clearAnalysisTask,
+    setInterviewStep,
+    setInterviewViewMode,
+  ]);
 
   // 持久化登录状态与用户档案
   useEffect(() => {
@@ -502,8 +631,11 @@ export default function App() {
       if (remainingInterviews.length > 0) {
         const nextInterview = remainingInterviews[0];
         setSelectedInterviewId(nextInterview.id);
-        setViewMode(nextInterview.status === '已完成' ? 'report' : 'upload');
-        setCurrentStep(nextInterview.status === '已完成' ? 3 : 2);
+        setInterviewViewMode(
+          nextInterview.id,
+          nextInterview.status === '已完成' ? 'report' : 'upload'
+        );
+        setInterviewStep(nextInterview.id, getDefaultStep(nextInterview));
       }
     }
 
@@ -522,9 +654,35 @@ export default function App() {
       delete copy[id];
       return copy;
     });
+    setTranscriptStates(prev => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setViewModeByInterview(prev => {
+      if (!(id in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setStepByInterview(prev => {
+      if (!(id in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setIsAITypingByInterview(prev => {
+      if (!(id in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
 
     clearUploadTask(id);
     clearAnalysisTask(id);
+    clearChatAbortController(id);
+    delete chatRequestVersionRef.current[id];
+    delete analysisRequestVersionRef.current[id];
     if (wasAnalyzing) {
       abortedAnalysisIdsRef.current.add(id);
       if (analysisCompletionTargetId === id) {
@@ -580,8 +738,8 @@ export default function App() {
     
     // Select the new interview and switch to upload view
     setSelectedInterviewId(newId);
-    setViewMode('upload');
-    setCurrentStep(1);
+    setInterviewViewMode(newId, 'upload');
+    setInterviewStep(newId, 1);
     
     // Show success toast
     toast.success(`面试分析 #${nextNumber} 已创建`);
@@ -598,9 +756,8 @@ export default function App() {
   }) => {
     if (!info.interviewId) return;
     completeUploadTaskState(info.interviewId);
-    if (selectedInterviewIdRef.current === info.interviewId) {
-      setCurrentStep(2);
-    }
+    setInterviewStep(info.interviewId, 2);
+    setInterviewViewMode(info.interviewId, 'upload');
     updateInterview(info.interviewId, {
       status: '已上传文件',
       fileUrl: info.filePath,
@@ -612,10 +769,10 @@ export default function App() {
     toast.success(`「${info.fileName}」上传完成`);
   };
 
-  const handleTranscriptUpdate = (text: string) => {
-    if (!selectedInterviewId) return;
-    updateInterview(selectedInterviewId, { transcriptText: text });
-  };
+  const handleTranscriptUpdate = useCallback((interviewId: string, text: string) => {
+    if (!interviewId) return;
+    updateInterview(interviewId, { transcriptText: text });
+  }, [updateInterview]);
 
   // Handle start analysis
   const handleStartAnalysis = async () => {
@@ -636,7 +793,26 @@ export default function App() {
     setAnalysisCompletionTargetId(null);
     abortedAnalysisIdsRef.current.delete(analyzingInterviewId);
     beginAnalysisTask(analyzingInterviewId);
-    setCurrentStep(3);
+    setInterviewStep(analyzingInterviewId, 3);
+
+    const analysisRequestVersion = bumpAnalysisRequestVersion(analyzingInterviewId);
+    if (IS_DEV) {
+      console.debug('[analysis] request-start', {
+        targetInterviewId: analyzingInterviewId,
+        currentInterviewId: selectedInterviewIdRef.current,
+        version: analysisRequestVersion,
+      });
+    }
+    const logStale = (phase: string) => {
+      if (IS_DEV) {
+        console.debug('[analysis] stale-skip', {
+          phase,
+          targetInterviewId: analyzingInterviewId,
+          currentInterviewId: selectedInterviewIdRef.current,
+          version: analysisRequestVersion,
+        });
+      }
+    };
 
     toast.success('开始分析面试内容...', {
       description: '正在进行转录和分析，预计需要 1-2 分钟',
@@ -652,6 +828,10 @@ export default function App() {
             currentUserProfile.userId,
             analyzingInterviewId
           );
+          if (!isAnalysisRequestActive(analyzingInterviewId, analysisRequestVersion)) {
+            logStale('transcribe');
+            return;
+          }
           transcriptText = transcriptData?.text || '';
           updateInterview(analyzingInterviewId, { transcriptText });
         } catch (transcribeError) {
@@ -665,6 +845,10 @@ export default function App() {
       if (abortedAnalysisIdsRef.current.has(analyzingInterviewId)) {
         clearAnalysisTask(analyzingInterviewId);
         abortedAnalysisIdsRef.current.delete(analyzingInterviewId);
+        return;
+      }
+      if (!isAnalysisRequestActive(analyzingInterviewId, analysisRequestVersion)) {
+        logStale('analysis');
         return;
       }
       setAnalysisResults((prev) => ({
@@ -682,10 +866,15 @@ export default function App() {
         setAnalysisCompletionTargetId(analyzingInterviewId);
       } else {
         updateInterview(analyzingInterviewId, { status: '已完成' });
+        setInterviewViewMode(analyzingInterviewId, 'report');
+        setInterviewStep(analyzingInterviewId, 3);
         clearAnalysisTask(analyzingInterviewId);
-        setViewMode('report');
       }
     } catch (error) {
+      if (!isAnalysisRequestActive(analyzingInterviewId, analysisRequestVersion)) {
+        logStale('error');
+        return;
+      }
       console.error('[analysis] 调用失败：', error);
       let failureReason = error instanceof Error ? error.message : '请稍后重试';
       if (abortedAnalysisIdsRef.current.has(analyzingInterviewId)) {
@@ -714,8 +903,9 @@ export default function App() {
           setAnalysisCompletionTargetId(analyzingInterviewId);
         } else {
           updateInterview(analyzingInterviewId, { status: '已完成' });
+          setInterviewViewMode(analyzingInterviewId, 'report');
+          setInterviewStep(analyzingInterviewId, 3);
           clearAnalysisTask(analyzingInterviewId);
-          setViewMode('report');
         }
       } catch (mockError) {
         console.warn('[analysis] 加载示例数据失败：', mockError);
@@ -760,6 +950,13 @@ export default function App() {
     setHasLoadedRemoteData(false);
     setUploadTasks({});
     setAnalysisTasks({});
+    setTranscriptStates({});
+    setViewModeByInterview({});
+    setStepByInterview({});
+    setIsAITypingByInterview({});
+    abortAllChatStreams();
+    chatRequestVersionRef.current = {};
+    analysisRequestVersionRef.current = {};
     localStorage.removeItem('interreview_isLoggedIn');
     localStorage.removeItem('interreview_currentUserProfile');
     if (lastProfile && wasDemoUser) {
@@ -774,14 +971,15 @@ export default function App() {
   // Handle send message
   const handleSendMessage = async (content: string) => {
     if (!selectedInterviewId || !currentUserProfile) return;
+    const targetInterviewId = selectedInterviewId;
     const question = (content || '').trim();
     if (!question) return;
-    if (isAITyping) {
+    if (isAITypingByInterview[targetInterviewId]) {
       toast.info('AI 正在回答，请稍候');
       return;
     }
 
-    const prevHistory = [...(interviewMessages[selectedInterviewId] || [])];
+    const prevHistory = [...(interviewMessages[targetInterviewId] || [])];
     const optimisticMessage: Message = {
       id: `msg-${Date.now()}`,
       role: 'user',
@@ -799,26 +997,44 @@ export default function App() {
 
     setInterviewMessages(prev => ({
       ...prev,
-      [selectedInterviewId]: [
-        ...(prev[selectedInterviewId] || []),
+      [targetInterviewId]: [
+        ...(prev[targetInterviewId] || []),
         optimisticMessage,
         placeholderAssistant,
       ],
     }));
-    setIsAITyping(true);
+
+    const chatVersion = bumpChatRequestVersion(targetInterviewId);
+    const controller = new AbortController();
+    assignChatAbortController(targetInterviewId, controller);
+    setInterviewTypingState(targetInterviewId, true);
+    const logChatStale = (phase: string) => {
+      if (IS_DEV) {
+        console.debug('[chat] stale-skip', {
+          phase,
+          targetInterviewId,
+          currentInterviewId: selectedInterviewIdRef.current,
+          version: chatVersion,
+        });
+      }
+    };
 
     try {
       await streamChatWithInterview(
         currentUserProfile.userId,
-        selectedInterviewId,
+        targetInterviewId,
         { question },
         {
           onChunk: (chunk) => {
+            if (!isChatRequestActive(targetInterviewId, chatVersion)) {
+              logChatStale('chunk');
+              return;
+            }
             setInterviewMessages(prev => {
-              const history = prev[selectedInterviewId] || [];
+              const history = prev[targetInterviewId] || [];
               return {
                 ...prev,
-                [selectedInterviewId]: history.map(msg =>
+                [targetInterviewId]: history.map(msg =>
                   msg.id === assistantMessageId
                     ? { ...msg, content: (msg.content || '') + chunk }
                     : msg
@@ -827,28 +1043,53 @@ export default function App() {
             });
           },
           onDone: (payload) => {
+            if (!isChatRequestActive(targetInterviewId, chatVersion)) {
+              logChatStale('done');
+              return;
+            }
             setInterviewMessages(prev => ({
               ...prev,
-              [selectedInterviewId]: payload.history as Message[],
+              [targetInterviewId]: payload.history as Message[],
             }));
           },
+          signal: controller.signal,
         }
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : '请稍后重试';
-      toast.error('智能问讯失败', { description: message });
-      setInterviewMessages(prev => ({
-        ...prev,
-        [selectedInterviewId]: prevHistory,
-      }));
+      if (isChatRequestActive(targetInterviewId, chatVersion)) {
+        const message = error instanceof Error ? error.message : '请稍后重试';
+        toast.error('智能问讯失败', { description: message });
+        setInterviewMessages(prev => ({
+          ...prev,
+          [targetInterviewId]: prevHistory,
+        }));
+      } else {
+        logChatStale('catch');
+      }
     } finally {
-      setIsAITyping(false);
+      if (isChatRequestActive(targetInterviewId, chatVersion)) {
+        setInterviewTypingState(targetInterviewId, false);
+        if (chatAbortControllerRef.current[targetInterviewId] === controller) {
+          delete chatAbortControllerRef.current[targetInterviewId];
+        }
+      }
     }
   };
 
   // Get current interview messages
-  const currentMessages = interviewMessages[selectedInterviewId] || [];
+  const currentMessages = selectedInterviewId ? interviewMessages[selectedInterviewId] || [] : [];
   const currentAnalysis = selectedInterviewId ? analysisResults[selectedInterviewId] : undefined;
+  const currentTranscriptPanelState = currentInterview ? transcriptStates[currentInterview.id] : undefined;
+  const currentViewMode: ViewMode = currentInterview
+    ? (selectedInterviewId ? viewModeByInterview[selectedInterviewId] : undefined) ??
+      getDefaultViewMode(currentInterview)
+    : 'upload';
+  const currentStep: StepValue = currentInterview
+    ? stepByInterview[currentInterview.id] ?? getDefaultStep(currentInterview)
+    : 1;
+  const isCurrentInterviewAITyping = selectedInterviewId
+    ? Boolean(isAITypingByInterview[selectedInterviewId])
+    : false;
 
   // Show login page if not logged in
   if (!isLoggedIn) {
@@ -869,18 +1110,19 @@ export default function App() {
       />
       
       {/* Left Sidebar */}
-      <Sidebar 
-        interviews={interviews}
-        selectedInterviewId={selectedInterviewId}
-        onInterviewSelect={(id, mode) => {
-          setSelectedInterviewId(id);
-          setViewMode(mode);
-          setCurrentStep(mode === 'upload' ? 2 : 3);
-          // 持久化当前选择
-          if (currentUserProfile && !isDemoUser) {
-            localStorage.setItem(`interreview_selectedInterview_${currentUserProfile.userId}`, id);
-          } else if (currentUserProfile && isDemoUser) {
-            localStorage.removeItem(`interreview_selectedInterview_${currentUserProfile.userId}`);
+        <Sidebar 
+          interviews={interviews}
+          selectedInterviewId={selectedInterviewId}
+          onInterviewSelect={(id, mode) => {
+            setSelectedInterviewId(id);
+            setInterviewViewMode(id, mode);
+            const target = interviews.find((item) => item.id === id);
+            setInterviewStep(id, getDefaultStep(target));
+            // 持久化当前选择
+            if (currentUserProfile && !isDemoUser) {
+              localStorage.setItem(`interreview_selectedInterview_${currentUserProfile.userId}`, id);
+            } else if (currentUserProfile && isDemoUser) {
+              localStorage.removeItem(`interreview_selectedInterview_${currentUserProfile.userId}`);
           }
         }}
         onInterviewRename={renameInterview}
@@ -894,7 +1136,7 @@ export default function App() {
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Top Header Bar */}
         <Header 
-          viewMode={viewMode} 
+          viewMode={currentViewMode} 
           interviewName={getInterviewName()}
           onRename={(newName) => renameInterview(selectedInterviewId, newName)}
         />
@@ -913,12 +1155,13 @@ export default function App() {
                 onVisualComplete={() => {
                   if (!currentInterview) return;
                   updateInterview(currentInterview.id, { status: '已完成' });
-                  setViewMode('report');
+                  setInterviewViewMode(currentInterview.id, 'report');
+                  setInterviewStep(currentInterview.id, 3);
                   clearAnalysisTask(currentInterview.id);
                   setAnalysisCompletionTargetId(null);
                 }}
               />
-            ) : viewMode === 'upload' ? (
+            ) : currentViewMode === 'upload' ? (
               <>
                 {/* Welcome Title */}
                 <h1 className="text-center">有什么可以帮忙的？</h1>
@@ -932,10 +1175,12 @@ export default function App() {
                 )}
                 
                 {/* AI Typing Indicator */}
-                {isAITyping && <TypingIndicator />}
+                {isCurrentInterviewAITyping && <TypingIndicator />}
                 
                 {/* Chat Area - Only show if no messages */}
-                {currentMessages.length === 0 && <ChatArea onSendMessage={handleSendMessage} disabled={isAITyping} />}
+                {currentMessages.length === 0 && (
+                  <ChatArea onSendMessage={handleSendMessage} disabled={isCurrentInterviewAITyping} />
+                )}
                 
                 {/* Upload Area */}
                 <UploadArea 
@@ -945,6 +1190,8 @@ export default function App() {
                   interviewStatus={currentInterview?.status}
                   interviewFileUrl={currentInterview?.fileUrl}
                   uploadTask={uploadTasks[selectedInterviewId]}
+                  transcriptState={currentTranscriptPanelState}
+                  onTranscriptStateChange={updateTranscriptPanelState}
                   onUploadStart={beginUploadTask}
                   onUploadError={failUploadTask}
                   onUploadComplete={handleUploadComplete} 
@@ -971,7 +1218,7 @@ export default function App() {
                 )}
                 
                 {/* AI Typing Indicator */}
-                {isAITyping && <TypingIndicator />}
+                {isCurrentInterviewAITyping && <TypingIndicator />}
               </>
             )}
           </div>
@@ -980,8 +1227,8 @@ export default function App() {
         {/* Chat Input - Fixed at Bottom (only show in report view) */}
         {interviews.length > 0 && 
          currentInterview?.status !== '分析中' && 
-         viewMode === 'report' && (
-          <ChatInput onSendMessage={handleSendMessage} disabled={isAITyping} />
+         currentViewMode === 'report' && (
+          <ChatInput onSendMessage={handleSendMessage} disabled={isCurrentInterviewAITyping} />
         )}
       </main>
     </div>

@@ -8,7 +8,7 @@ import {
   FileText,
   RefreshCw,
 } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { toast } from 'sonner@2.0.3';
 import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../utils/backend';
 import type { InterviewStatus } from '../utils/backend';
@@ -85,6 +85,22 @@ const getMediaDuration = (file: File): Promise<number | null> => {
   });
 };
 
+type TranscriptPanelState = {
+  text: string;
+  updatedAt: string | null;
+  isLoading: boolean;
+  isTranscribing: boolean;
+  error: string | null;
+};
+
+const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
+  text: '',
+  updatedAt: null,
+  isLoading: false,
+  isTranscribing: false,
+  error: null,
+};
+
 interface UploadAreaProps {
   userId?: string;
   interviewId?: string;
@@ -93,11 +109,13 @@ interface UploadAreaProps {
   interviewFileUrl?: string;
   initialTranscript?: string;
   uploadTask?: UploadTaskState;
+  transcriptState?: TranscriptPanelState;
+  onTranscriptStateChange?: (interviewId: string, changes: Partial<TranscriptPanelState>) => void;
   onUploadStart?: (info: { interviewId: string; fileName: string; previousStatus?: InterviewStatus }) => void;
   onUploadError?: (info: { interviewId: string; error?: string }) => void;
   onUploadComplete?: (info: { interviewId: string; fileName: string; filePath: string; fileType?: string; durationSeconds?: number; durationText?: string }) => void;
   onStartAnalysis?: () => void;
-  onTranscriptUpdate?: (text: string) => void;
+  onTranscriptUpdate?: (interviewId: string, text: string) => void;
 }
 
 export function UploadArea({
@@ -108,6 +126,8 @@ export function UploadArea({
   interviewFileUrl,
   initialTranscript,
   uploadTask,
+  transcriptState,
+  onTranscriptStateChange,
   onUploadStart,
   onUploadError,
   onUploadComplete,
@@ -116,11 +136,6 @@ export function UploadArea({
 }: UploadAreaProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
-  const [transcript, setTranscript] = useState(initialTranscript || '');
-  const [transcriptUpdatedAt, setTranscriptUpdatedAt] = useState<string | null>(null);
-  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const [displayProgress, setDisplayProgress] = useState(() =>
     computeTaskProgress(uploadTask, {
       config: DEFAULT_UPLOAD_PROGRESS_CONFIG,
@@ -128,6 +143,21 @@ export function UploadArea({
     })
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const resolvedTranscriptState = transcriptState ?? DEFAULT_TRANSCRIPT_PANEL_STATE;
+  const {
+    text: transcript,
+    updatedAt: transcriptUpdatedAt,
+    isLoading: isLoadingTranscript,
+    isTranscribing,
+    error: transcriptionError,
+  } = resolvedTranscriptState;
+  const patchTranscriptState = useCallback(
+    (targetInterviewId: string | undefined, patch: Partial<TranscriptPanelState>) => {
+      if (!targetInterviewId) return;
+      onTranscriptStateChange?.(targetInterviewId, patch);
+    },
+    [onTranscriptStateChange]
+  );
 
   useEffect(() => {
     if (!uploadTask) {
@@ -244,10 +274,13 @@ export function UploadArea({
       if (isTextFile) {
         try {
           const text = await readTextTranscript(file);
-          setTranscript(text);
           const updatedAt = new Date().toISOString();
-          setTranscriptUpdatedAt(updatedAt);
-          onTranscriptUpdate?.(text);
+          patchTranscriptState(targetInterviewId, {
+            text,
+            updatedAt,
+            error: null,
+          });
+          onTranscriptUpdate?.(targetInterviewId, text);
           toast.success('已导入文本转录内容');
         } catch (readError) {
           const message = readError instanceof Error ? readError.message : '读取文本失败';
@@ -333,64 +366,78 @@ export function UploadArea({
       return;
     }
 
+    const targetInterviewId = interviewId;
+
     try {
-      setIsTranscribing(true);
-      setTranscriptionError(null);
-      const transcriptData = await transcribeInterview(userId, interviewId);
+      patchTranscriptState(targetInterviewId, { isTranscribing: true, error: null });
+      const transcriptData = await transcribeInterview(userId, targetInterviewId);
       const text = transcriptData?.text || '';
-      setTranscript(text);
-      setTranscriptUpdatedAt(transcriptData?.createdAt || new Date().toISOString());
-      onTranscriptUpdate?.(text);
+      const updatedAt = transcriptData?.createdAt || new Date().toISOString();
+      patchTranscriptState(targetInterviewId, {
+        text,
+        updatedAt,
+        isTranscribing: false,
+        error: null,
+      });
+      onTranscriptUpdate?.(targetInterviewId, text);
       toast.success('转写完成');
     } catch (error) {
       const message = error instanceof Error ? error.message : '转录失败';
-      setTranscriptionError(message);
+      patchTranscriptState(targetInterviewId, { isTranscribing: false, error: message });
       toast.error('转写失败', { description: message });
     } finally {
-      setIsTranscribing(false);
+      patchTranscriptState(targetInterviewId, { isTranscribing: false });
     }
   };
 
   useEffect(() => {
     if (!userId || !interviewId) {
-      setTranscript('');
-      setTranscriptUpdatedAt(null);
       return;
     }
 
     let cancelled = false;
-    setTranscriptionError(null);
-    setIsLoadingTranscript(true);
-    fetchTranscript(userId, interviewId)
+    const targetInterviewId = interviewId;
+    patchTranscriptState(targetInterviewId, { error: null, isLoading: true });
+    fetchTranscript(userId, targetInterviewId)
       .then((data) => {
         if (cancelled) return;
         if (data?.text) {
-          setTranscript(data.text);
-          setTranscriptUpdatedAt(data.createdAt || null);
-          onTranscriptUpdate?.(data.text);
+          patchTranscriptState(targetInterviewId, {
+            text: data.text,
+            updatedAt: data.createdAt || null,
+            isLoading: false,
+            error: null,
+          });
+          onTranscriptUpdate?.(targetInterviewId, data.text);
         } else if (initialTranscript) {
-          setTranscript(initialTranscript);
-          onTranscriptUpdate?.(initialTranscript);
+          patchTranscriptState(targetInterviewId, {
+            text: initialTranscript,
+            updatedAt: null,
+            isLoading: false,
+            error: null,
+          });
+          onTranscriptUpdate?.(targetInterviewId, initialTranscript);
         } else {
-          setTranscript('');
-          setTranscriptUpdatedAt(null);
+          patchTranscriptState(targetInterviewId, {
+            text: '',
+            updatedAt: null,
+            isLoading: false,
+          });
         }
       })
       .catch((error) => {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : '获取转录失败';
-        setTranscriptionError(message);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoadingTranscript(false);
-        }
+        patchTranscriptState(targetInterviewId, {
+          error: message,
+          isLoading: false,
+        });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [userId, interviewId, initialTranscript, onTranscriptUpdate]);
+  }, [userId, interviewId, initialTranscript, onTranscriptUpdate, patchTranscriptState]);
 
   const existingFileName =
     uploadedFile?.name ||

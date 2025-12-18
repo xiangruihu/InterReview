@@ -27,6 +27,7 @@ import {
   DEFAULT_ANALYSIS_PROGRESS_CONFIG,
   DEFAULT_ANALYSIS_COMPLETION_DURATION,
 } from './constants/progress';
+import { filenameToInterviewTitle, isDefaultInterviewTitle } from './utils/interviewTitle';
 
 const DEMO_USER_EMAIL = 'demo@example.com';
 type ViewMode = 'upload' | 'report';
@@ -167,6 +168,36 @@ export default function App() {
   
   // Interview data state - Load from localStorage
   const [interviews, setInterviews] = useState<InterviewData[]>(() => getDefaultInterviews());
+  const setInterviewTitle = useCallback(
+    (interviewId: string, rawTitle: string): boolean => {
+      if (!interviewId) return false;
+      const nextTitle = (rawTitle ?? '').trim();
+      if (!nextTitle) return false;
+      let didChange = false;
+      setInterviews((prev) =>
+        prev.map((interview) => {
+          if (interview.id !== interviewId) return interview;
+          if (interview.title === nextTitle) return interview;
+          didChange = true;
+          return { ...interview, title: nextTitle };
+        })
+      );
+      return didChange;
+    },
+    []
+  );
+  const autoNameInterviewFromFile = useCallback(
+    (interviewId: string, fileName: string) => {
+      if (!interviewId || !fileName) return;
+      const currentInterview = interviews.find((item) => item.id === interviewId);
+      if (!currentInterview) return;
+      if (!isDefaultInterviewTitle(currentInterview.title)) return;
+      const derivedTitle = filenameToInterviewTitle(fileName);
+      if (!derivedTitle) return;
+      setInterviewTitle(interviewId, derivedTitle);
+    },
+    [interviews, setInterviewTitle]
+  );
 
   // Get current interview
   const currentInterview = interviews.find(i => i.id === selectedInterviewId);
@@ -663,11 +694,20 @@ export default function App() {
   }, [isLoggedIn, currentUserProfile?.userId, hydrateFromBackend]);
 
   // Rename interview
-  const renameInterview = (id: string, newTitle: string) => {
-    const oldTitle = interviews.find(i => i.id === id)?.title;
-    updateInterview(id, { title: newTitle });
-    toast.success(`已重命名为「${newTitle}」`);
-  };
+  const renameInterview = useCallback(
+    (id: string, newTitle: string) => {
+      const trimmed = (newTitle ?? '').trim();
+      if (!trimmed) {
+        toast.error('标题不能为空');
+        return;
+      }
+      const changed = setInterviewTitle(id, trimmed);
+      if (changed) {
+        toast.success(`已重命名为「${trimmed}」`);
+      }
+    },
+    [setInterviewTitle]
+  );
 
   // Show delete confirmation dialog
   const showDeleteDialog = (id: string) => {
@@ -827,6 +867,7 @@ export default function App() {
       durationSeconds: info.durationSeconds,
       durationText: info.durationText,
     });
+    autoNameInterviewFromFile(info.interviewId, info.fileName);
     delete uploadPreviousStatusRef.current[info.interviewId];
     toast.success(`「${info.fileName}」上传完成`);
   };

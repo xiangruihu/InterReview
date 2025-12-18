@@ -16,6 +16,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Toaster } from 'sonner@2.0.3';
 import { toast } from 'sonner@2.0.3';
 import { fetchInterviews, fetchMessages, saveInterviews, saveMessages, fetchAnalysis, saveAnalysis, analyzeInterviewReport, transcribeInterview, streamChatWithInterview } from './utils/backend';
+import type { TranscriptChunk } from './utils/backend';
 import { getMockAnalysisData } from './utils/mockAnalysis';
 import type { AnalysisData } from './types/analysis';
 import type { UploadTaskState, AnalysisTaskState } from './types/uploads';
@@ -69,6 +70,9 @@ interface TranscriptPanelState {
   isLoading: boolean;
   isTranscribing: boolean;
   error: string | null;
+  chunks: TranscriptChunk[];
+  failedChunks: TranscriptChunk[];
+  overallStatus: 'idle' | 'empty' | 'completed' | 'partial' | 'error' | 'pending';
 }
 
 const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
@@ -77,6 +81,9 @@ const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
   isLoading: false,
   isTranscribing: false,
   error: null,
+  chunks: [],
+  failedChunks: [],
+  overallStatus: 'idle',
 };
 
 const DEFAULT_UPLOAD_UI_STATE: UploadUIState = {

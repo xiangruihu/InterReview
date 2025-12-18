@@ -9,11 +9,57 @@ try:
 except ImportError:  # pragma: no cover - fallback for mock mode
     requests = None
 import asyncio
-from typing import Optional, List
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Sequence, Literal
 from pathlib import Path
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+ChunkStatus = Literal["pending", "ok", "error"]
+
+
+@dataclass
+class ChunkTranscription:
+    """Chunk-level transcription result used for manifest."""
+
+    index: int
+    filename: str
+    status: ChunkStatus
+    text: str = ""
+    error: Optional[str] = None
+    retry_count: int = 0
+    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    def to_dict(self) -> Dict[str, Optional[str]]:
+        return {
+            "index": self.index,
+            "filename": self.filename,
+            "status": self.status,
+            "text": self.text,
+            "error": self.error,
+            "retryCount": self.retry_count,
+            "updatedAt": self.updated_at,
+        }
+
+
+@dataclass
+class TranscriptionResult:
+    """Aggregated transcription output for the full file."""
+
+    chunks: List[ChunkTranscription]
+    merged_text: str
+    overall_status: str
+    failed_chunks: List[ChunkTranscription]
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "chunks": [chunk.to_dict() for chunk in self.chunks],
+            "chunkCount": len(self.chunks),
+            "mergedText": self.merged_text,
+            "overallStatus": self.overall_status,
+            "failedChunks": [chunk.to_dict() for chunk in self.failed_chunks],
+        }
 
 class TranscriptionService:
     """语音转文字服务 - 使用 SiliconFlow API"""
@@ -37,7 +83,7 @@ class TranscriptionService:
         self,
         file_path: Path,
         model: str = "FunAudioLLM/SenseVoiceSmall"
-    ) -> Optional[str]:
+    ) -> TranscriptionResult:
         """
         转录音频/视频/文本文件为文本
         """
@@ -55,18 +101,29 @@ class TranscriptionService:
         if file_path.suffix.lower() in ['.txt', '.md']:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            if content.strip():
-                return content
-            return self._generate_mock_transcript(file_path)
+            chunk = ChunkTranscription(
+                index=0,
+                filename=file_path.name,
+                status="ok",
+                text=content.strip()
+            )
+            return self._build_transcription_result([chunk])
 
         if self.use_mock:
-            return self._generate_mock_transcript(file_path)
+            mock_text = self._generate_mock_transcript(file_path)
+            chunk = ChunkTranscription(
+                index=0,
+                filename=file_path.name,
+                status="ok",
+                text=mock_text
+            )
+            return self._build_transcription_result([chunk])
 
         chunk_dir: Optional[Path] = None
         chunk_files: List[Path] = []
+        temp_file: Optional[Path] = None
 
         try:
-            temp_file: Optional[Path] = None
             transcription_target = file_path
 
             if self._should_convert_to_mp3(file_path):
@@ -77,14 +134,22 @@ class TranscriptionService:
                 chunk_dir = Path(tempfile.mkdtemp(prefix="ir_chunk_"))
                 chunk_files = self._split_audio_file(transcription_target, chunk_dir)
 
-            if chunk_files:
-                chunk_texts = await self._transcribe_chunks(chunk_files, model)
-                return self._combine_chunk_texts(chunk_texts, chunk_files)
+            if not chunk_files:
+                chunk_files = [transcription_target]
 
-            return await asyncio.to_thread(self._transcribe_via_requests, transcription_target, model)
+            chunk_results_map = await self._transcribe_chunk_group(chunk_files, model)
+            ordered_chunks = [chunk_results_map[idx] for idx in range(len(chunk_files))]
+            return self._build_transcription_result(ordered_chunks)
         except Exception as exc:
             print(f"转录失败，使用模拟数据: {exc}")
-            return self._generate_mock_transcript(file_path)
+            mock_text = self._generate_mock_transcript(file_path)
+            chunk = ChunkTranscription(
+                index=0,
+                filename=file_path.name,
+                status="ok",
+                text=mock_text
+            )
+            return self._build_transcription_result([chunk])
         finally:
             if temp_file and temp_file.exists():
                 try:
@@ -254,32 +319,185 @@ class TranscriptionService:
         logger.info("Split %s into %d segments", file_path.name, len(chunks))
         return chunks
 
-    async def _transcribe_chunks(self, chunk_files: List[Path], model: str) -> List[str]:
-        """并发转录切片"""
+    async def transcribe_chunk_subset(
+        self,
+        file_path: Path,
+        indices: Sequence[int],
+        model: str = "FunAudioLLM/SenseVoiceSmall"
+    ) -> Dict[int, ChunkTranscription]:
+        """
+        仅重试给定分片序号，返回对应的 chunk manifest
+        """
+        if not file_path.exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+
+        if not indices:
+            return {}
+
+        file_size = file_path.stat().st_size
+        if file_size > self.max_file_size:
+            raise ValueError(f"文件过大，最大支持 {self.max_file_size / (1024 * 1024):.0f}MB")
+
+        if file_path.suffix.lower() in ['.txt', '.md'] or self.use_mock:
+            if 0 not in {int(idx) for idx in indices}:
+                return {}
+            text = (
+                self._generate_mock_transcript(file_path)
+                if self.use_mock
+                else file_path.read_text(encoding='utf-8')
+            )
+            chunk = ChunkTranscription(
+                index=0,
+                filename=file_path.name,
+                status="ok",
+                text=text.strip()
+            )
+            return {0: chunk}
+
+        temp_file: Optional[Path] = None
+        chunk_dir: Optional[Path] = None
+        try:
+            transcription_target = file_path
+            if self._should_convert_to_mp3(file_path):
+                temp_file = self._convert_to_mp3(file_path)
+                transcription_target = temp_file
+
+            chunk_files: List[Path] = []
+            if self._should_chunk_audio(transcription_target):
+                chunk_dir = Path(tempfile.mkdtemp(prefix="ir_chunk_retry_"))
+                chunk_files = self._split_audio_file(transcription_target, chunk_dir)
+
+            if not chunk_files:
+                chunk_files = [transcription_target]
+
+            normalized_indices = sorted({idx for idx in indices if 0 <= idx < len(chunk_files)})
+            if not normalized_indices:
+                return {}
+
+            return await self._transcribe_chunk_group(
+                chunk_files,
+                model,
+                target_indices=normalized_indices
+            )
+        finally:
+            if temp_file and temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            if chunk_dir and chunk_dir.exists():
+                shutil.rmtree(chunk_dir, ignore_errors=True)
+
+    async def _transcribe_chunk_group(
+        self,
+        chunk_files: List[Path],
+        model: str,
+        target_indices: Optional[Sequence[int]] = None
+    ) -> Dict[int, ChunkTranscription]:
+        """并发转录多个切片，并返回索引 -> chunk manifest"""
+        if target_indices is None:
+            indices = list(range(len(chunk_files)))
+        else:
+            indices = sorted({idx for idx in target_indices if 0 <= idx < len(chunk_files)})
+
+        if not indices:
+            return {}
+
         semaphore = asyncio.Semaphore(max(1, self.max_parallel_chunks))
-        results: List[Optional[str]] = [None] * len(chunk_files)
+        results: Dict[int, ChunkTranscription] = {}
 
         async def worker(idx: int, chunk_path: Path):
             async with semaphore:
-                try:
-                    text = await asyncio.to_thread(self._transcribe_via_requests, chunk_path, model)
-                except Exception as exc:
-                    logger.error("切片 %s 转录失败: %s", chunk_path.name, exc)
-                    text = ""
-                results[idx] = text or ""
+                chunk_result = await self._transcribe_single_chunk(idx, chunk_path, model)
+                results[idx] = chunk_result
 
-        tasks = [asyncio.create_task(worker(idx, path)) for idx, path in enumerate(chunk_files)]
+        tasks = [asyncio.create_task(worker(idx, chunk_files[idx])) for idx in indices]
         await asyncio.gather(*tasks)
-        return [text or "" for text in results]
+        return results
 
-    def _combine_chunk_texts(self, texts: List[str], chunk_files: List[Path]) -> str:
+    async def _transcribe_single_chunk(self, idx: int, chunk_path: Path, model: str) -> ChunkTranscription:
+        """单个切片的重试控制"""
+        attempt = 0
+        retry_count = 0
+        delay_seconds = 1.0
+        text_result = ""
+        last_error: Optional[str] = None
+
+        while attempt < 3:
+            attempt += 1
+            try:
+                text_result = await asyncio.to_thread(self._transcribe_via_requests, chunk_path, model)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt >= 3:
+                    logger.error("切片 %s 第 %d 次转录失败: %s", chunk_path.name, attempt, exc)
+                    break
+                retry_count += 1
+                logger.warning(
+                    "切片 %s 转录失败，%d 秒后重试 (%d/3): %s",
+                    chunk_path.name,
+                    int(delay_seconds),
+                    attempt,
+                    exc
+                )
+                await asyncio.sleep(delay_seconds)
+                delay_seconds = min(delay_seconds * 2, 8.0)
+
+        status: ChunkStatus = "ok" if last_error is None else "error"
+        safe_text = (text_result or "").strip() if status == "ok" else ""
+        return ChunkTranscription(
+            index=idx,
+            filename=chunk_path.name,
+            status=status,
+            text=safe_text,
+            error=None if status == "ok" else (last_error or "转录失败"),
+            retry_count=retry_count,
+            updated_at=datetime.utcnow().isoformat()
+        )
+
+    def _build_transcription_result(self, chunks: List[ChunkTranscription]) -> TranscriptionResult:
+        """构造完整的转录结果"""
+        merged_text = self._combine_chunk_texts(chunks)
+        failed = [chunk for chunk in chunks if chunk.status == "error"]
+        overall_status = self._determine_overall_status(chunks, failed)
+        return TranscriptionResult(
+            chunks=chunks,
+            merged_text=merged_text,
+            overall_status=overall_status,
+            failed_chunks=failed
+        )
+
+    def _determine_overall_status(
+        self,
+        chunks: Sequence[ChunkTranscription],
+        failed: Optional[Sequence[ChunkTranscription]] = None
+    ) -> str:
+        if not chunks:
+            return "empty"
+        failed = failed if failed is not None else [chunk for chunk in chunks if chunk.status == "error"]
+        if not failed:
+            return "completed"
+        if len(failed) == len(chunks):
+            return "error"
+        return "partial"
+
+    def _combine_chunk_texts(self, chunks: List[ChunkTranscription]) -> str:
         """合并分片转录结果"""
-        combined_segments = []
-        for idx, text in enumerate(texts):
-            label = chunk_files[idx].name if idx < len(chunk_files) else f"chunk_{idx:03d}"
-            header = f"【分片 {idx + 1}/{len(texts)} · {label}】"
+        combined_segments: List[str] = []
+        total = len(chunks)
+        for idx, chunk in enumerate(chunks):
+            label = chunk.filename or f"chunk_{idx:03d}"
+            header = f"【分片 {idx + 1}/{total} · {label}】"
             combined_segments.append(header)
-            combined_segments.append(text.strip())
+            if chunk.status == "ok":
+                content = (chunk.text or "").strip()
+                if content:
+                    combined_segments.append(content)
+                else:
+                    combined_segments.append("(该分片暂无可显示的内容)")
+            elif chunk.status == "error":
+                combined_segments.append(f"(分片转录失败：{chunk.error or '请稍后重试'})")
+            else:
+                combined_segments.append("(分片仍在处理中)")
             combined_segments.append("")
         return "\n".join(segment for segment in combined_segments if segment.strip())
 
@@ -303,9 +521,10 @@ async def test_transcription():
     print(f"开始转录音频: {test_file}")
     result = await service.transcribe_audio(test_file)
 
-    if result:
+    if result and result.merged_text:
         print("转录成功!")
-        print("结果:", result[:200] + "..." if len(result) > 200 else result)
+        text_preview = result.merged_text
+        print("结果:", text_preview[:200] + "..." if len(text_preview) > 200 else text_preview)
     else:
         print("转录失败")
 

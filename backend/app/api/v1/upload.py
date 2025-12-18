@@ -6,12 +6,32 @@ import shutil
 import logging
 from app.config import settings
 from app.services.storage_service import StorageService
-from app.services.transcription_service import TranscriptionService
+from app.services.transcription_service import TranscriptionService, TranscriptionResult
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 storage = StorageService()
 transcriber = TranscriptionService(settings.SILICONFLOW_API_KEY)
 logger = logging.getLogger(__name__)
+
+
+def _build_transcript_payload(
+    interview_id: str,
+    file_path: Path,
+    model: str,
+    result: TranscriptionResult
+):
+    timestamp = datetime.utcnow().isoformat()
+    return {
+        "interviewId": interview_id,
+        "text": result.merged_text,
+        "model": model,
+        "filePath": str(file_path),
+        "createdAt": timestamp,
+        "updatedAt": timestamp,
+        "chunks": [chunk.to_dict() for chunk in result.chunks],
+        "failedChunks": [chunk.to_dict() for chunk in result.failed_chunks],
+        "overallStatus": result.overall_status,
+    }
 
 @router.post("/interview/{user_id}/{interview_id}")
 async def upload_interview_file(
@@ -80,39 +100,34 @@ async def upload_interview_file(
 
     # 自动执行转录
     try:
-        transcript_text = await transcriber.transcribe_audio(
+        transcription_result = await transcriber.transcribe_audio(
             file_path,
             model=settings.TRANSCRIPTION_MODEL
         )
-        if transcript_text:
-            transcript_payload = {
-                "interviewId": interview_id,
-                "text": transcript_text,
-                "model": settings.TRANSCRIPTION_MODEL,
-                "filePath": str(file_path),
-                "createdAt": datetime.utcnow().isoformat()
+        transcript_payload = _build_transcript_payload(
+            interview_id=interview_id,
+            file_path=file_path,
+            model=settings.TRANSCRIPTION_MODEL,
+            result=transcription_result
+        )
+        storage.save_transcript(user_id, interview_id, transcript_payload)
+        storage.update_interview(
+            user_id,
+            interview_id,
+            {
+                "status": "已上传文件",
+                "transcriptText": transcript_payload.get("text")
             }
-            storage.save_transcript(user_id, interview_id, transcript_payload)
-            storage.update_interview(
-                user_id,
-                interview_id,
-                {
-                    "status": "已上传文件",
-                    "transcriptText": transcript_text
-                }
-            )
-            logger.info(
-                "[Upload][Transcribe] user=%s interview=%s len=%d",
-                user_id,
-                interview_id,
-                len(transcript_text)
-            )
-        else:
-            logger.warning(
-                "[Upload][Transcribe] 无转录结果 user=%s interview=%s",
-                user_id,
-                interview_id
-            )
+        )
+        transcript_text = transcript_payload.get("text") or ""
+        logger.info(
+            "[Upload][Transcribe] user=%s interview=%s chunks=%d status=%s len=%d",
+            user_id,
+            interview_id,
+            len(transcription_result.chunks),
+            transcription_result.overall_status,
+            len(transcript_text)
+        )
     except Exception as e:
         logger.error(
             "[Upload][Transcribe] 失败 user=%s interview=%s err=%s",

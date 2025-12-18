@@ -183,12 +183,34 @@ export interface UploadInterviewResponse {
   file_type?: string;
 }
 
+export type TranscriptChunkStatus = 'pending' | 'ok' | 'error';
+
+export interface TranscriptChunk {
+  index: number;
+  filename: string;
+  status: TranscriptChunkStatus;
+  text?: string;
+  error?: string;
+  retryCount?: number;
+  updatedAt?: string;
+}
+
 export interface TranscriptPayload {
   interviewId: string;
   text: string;
   model?: string;
   filePath?: string;
   createdAt?: string;
+  updatedAt?: string;
+  chunks?: TranscriptChunk[];
+  failedChunks?: TranscriptChunk[];
+  overallStatus?: 'empty' | 'completed' | 'partial' | 'error';
+  chunkCount?: number;
+}
+
+export interface TranscriptRetryPayload {
+  chunkIndices?: number[];
+  model?: string;
 }
 
 interface UploadInterviewOptions {
@@ -307,6 +329,29 @@ export async function fetchTranscript(
 
   const data = await resp.json();
   return data?.data || null;
+}
+
+export async function retryTranscriptChunks(
+  userId: string,
+  interviewId: string,
+  payload?: TranscriptRetryPayload
+): Promise<TranscriptPayload> {
+  const resp = await fetch(
+    `${BACKEND_BASE}/interviews/${interviewId}/transcript/retry_failed?user_id=${encodeURIComponent(userId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }
+  );
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`retryTranscriptChunks failed: ${resp.status} ${text}`);
+  }
+
+  const data = await resp.json();
+  return data?.data;
 }
 
 export async function chatWithInterview(

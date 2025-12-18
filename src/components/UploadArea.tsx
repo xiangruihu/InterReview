@@ -10,7 +10,8 @@ import {
 } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { toast } from 'sonner@2.0.3';
-import { uploadInterviewFile, transcribeInterview, fetchTranscript } from '../utils/backend';
+import { uploadInterviewFile, transcribeInterview, fetchTranscript, retryTranscriptChunks } from '../utils/backend';
+import type { TranscriptChunk, TranscriptPayload } from '../utils/backend';
 import type { InterviewStatus } from '../utils/backend';
 import { formatDuration } from '../utils/time';
 import type { UploadTaskState } from '../types/uploads';
@@ -85,12 +86,25 @@ const getMediaDuration = (file: File): Promise<number | null> => {
   });
 };
 
+const createLocalChunk = (text: string, fileName?: string): TranscriptChunk => ({
+  index: 0,
+  filename: fileName || 'transcript.txt',
+  status: 'ok',
+  text,
+  error: undefined,
+  retryCount: 0,
+  updatedAt: new Date().toISOString(),
+});
+
 type TranscriptPanelState = {
   text: string;
   updatedAt: string | null;
   isLoading: boolean;
   isTranscribing: boolean;
   error: string | null;
+  chunks: TranscriptChunk[];
+  failedChunks: TranscriptChunk[];
+  overallStatus: 'idle' | 'empty' | 'completed' | 'partial' | 'error' | 'pending';
 };
 
 const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
@@ -99,6 +113,9 @@ const DEFAULT_TRANSCRIPT_PANEL_STATE: TranscriptPanelState = {
   isLoading: false,
   isTranscribing: false,
   error: null,
+  chunks: [],
+  failedChunks: [],
+  overallStatus: 'idle',
 };
 
 export type UploadUIStage = 'idle' | 'uploading' | 'uploaded';
@@ -165,7 +182,31 @@ export function UploadArea({
     isLoading: isLoadingTranscript,
     isTranscribing,
     error: transcriptionError,
+    chunks = [],
+    failedChunks = [],
+    overallStatus,
   } = resolvedTranscriptState;
+  const sortedChunks = [...chunks].sort((a, b) => a.index - b.index);
+  const hasChunkData = sortedChunks.length > 0;
+  const hasFailedChunks = failedChunks.length > 0;
+  const getChunkStatusMeta = useCallback((status: TranscriptChunk['status']) => {
+    if (status === 'ok') {
+      return { label: '成功', classes: 'bg-green-100 text-green-700' };
+    }
+    if (status === 'error') {
+      return { label: '失败', classes: 'bg-red-100 text-red-700' };
+    }
+    return { label: '转写中', classes: 'bg-amber-100 text-amber-700' };
+  }, []);
+  const getChunkContent = useCallback((chunk: TranscriptChunk) => {
+    if (chunk.status === 'ok') {
+      return chunk.text?.trim() || '该分片暂无可显示的内容';
+    }
+    if (chunk.status === 'error') {
+      return `转写失败：${chunk.error || '请稍后重试'}`;
+    }
+    return '该分片正在重新转写中...';
+  }, []);
   const patchTranscriptState = useCallback(
     (targetInterviewId: string | undefined, patch: Partial<TranscriptPanelState>) => {
       if (!targetInterviewId) return;
@@ -179,6 +220,54 @@ export function UploadArea({
       onPatchUploadUI?.(targetInterviewId, patch);
     },
     [onPatchUploadUI]
+  );
+
+  const normalizeTranscriptPayload = useCallback((payload?: TranscriptPayload | null) => {
+    if (!payload) {
+      return {
+        text: '',
+        updatedAt: null,
+        chunks: [],
+        failedChunks: [],
+        overallStatus: 'empty',
+      } as Partial<TranscriptPanelState>;
+    }
+    const chunkList = [...(payload.chunks ?? [])].sort((a, b) => a.index - b.index);
+    const failedList = payload.failedChunks ?? chunkList.filter(chunk => chunk.status === 'error');
+    let status: TranscriptPanelState['overallStatus'] | undefined = payload.overallStatus as TranscriptPanelState['overallStatus'];
+    if (!status) {
+      if (chunkList.length === 0) {
+        status = 'empty';
+      } else if (failedList.length > 0) {
+        status = failedList.length === chunkList.length ? 'error' : 'partial';
+      } else {
+        status = 'completed';
+      }
+    }
+    return {
+      text: payload.text || '',
+      updatedAt: payload.updatedAt || payload.createdAt || null,
+      chunks: chunkList,
+      failedChunks: failedList,
+      overallStatus: status,
+    } as Partial<TranscriptPanelState>;
+  }, []);
+
+  const applyTranscriptPayload = useCallback(
+    (targetInterviewId: string | undefined, payload?: TranscriptPayload | null) => {
+      if (!targetInterviewId) return;
+      const normalized = normalizeTranscriptPayload(payload);
+      patchTranscriptState(targetInterviewId, {
+        ...normalized,
+        isLoading: false,
+        isTranscribing: false,
+        error: null,
+      });
+      if (payload && typeof payload.text === 'string') {
+        onTranscriptUpdate?.(targetInterviewId, payload.text);
+      }
+    },
+    [normalizeTranscriptPayload, onTranscriptUpdate, patchTranscriptState]
   );
 
   const fallbackUploadState: UploadUIState = (() => {
@@ -329,11 +418,14 @@ export function UploadArea({
       if (isTextFile) {
         try {
           const text = await readTextTranscript(file);
-          const updatedAt = new Date().toISOString();
+          const chunk = createLocalChunk(text, file.name);
           patchTranscriptState(targetInterviewId, {
             text,
-            updatedAt,
+            updatedAt: chunk.updatedAt || new Date().toISOString(),
             error: null,
+            chunks: [chunk],
+            failedChunks: [],
+            overallStatus: 'completed',
           });
           onTranscriptUpdate?.(targetInterviewId, text);
           toast.success('已导入文本转录内容');
@@ -427,15 +519,7 @@ export function UploadArea({
     try {
       patchTranscriptState(targetInterviewId, { isTranscribing: true, error: null });
       const transcriptData = await transcribeInterview(userId, targetInterviewId);
-      const text = transcriptData?.text || '';
-      const updatedAt = transcriptData?.createdAt || new Date().toISOString();
-      patchTranscriptState(targetInterviewId, {
-        text,
-        updatedAt,
-        isTranscribing: false,
-        error: null,
-      });
-      onTranscriptUpdate?.(targetInterviewId, text);
+      applyTranscriptPayload(targetInterviewId, transcriptData);
       toast.success('转写完成');
     } catch (error) {
       const message = error instanceof Error ? error.message : '转录失败';
@@ -443,6 +527,39 @@ export function UploadArea({
       toast.error('转写失败', { description: message });
     } finally {
       patchTranscriptState(targetInterviewId, { isTranscribing: false });
+    }
+  };
+
+  const handleRetryChunks = async (chunkIndices?: number[]) => {
+    if (!userId || !interviewId) {
+      toast.error('请先选择面试');
+      return;
+    }
+    if (!hasUploaded) {
+      toast.error('请先上传文件');
+      return;
+    }
+    const targetInterviewId = interviewId;
+    try {
+      const indicesSet = chunkIndices ? new Set(chunkIndices) : null;
+      const optimisticChunks = chunks.map(chunk =>
+        !indicesSet || indicesSet.has(chunk.index)
+          ? { ...chunk, status: 'pending' as const, error: undefined }
+          : chunk
+      );
+      patchTranscriptState(targetInterviewId, {
+        isTranscribing: true,
+        error: null,
+        chunks: optimisticChunks,
+      });
+      const payload = chunkIndices && chunkIndices.length > 0 ? { chunkIndices } : undefined;
+      const data = await retryTranscriptChunks(userId, targetInterviewId, payload);
+      applyTranscriptPayload(targetInterviewId, data);
+      toast.success(chunkIndices && chunkIndices.length === 1 ? '分片重试完成' : '失败分片已重新转写');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '重试失败';
+      patchTranscriptState(targetInterviewId, { isTranscribing: false, error: message });
+      toast.error('重试失败', { description: message });
     }
   };
 
@@ -457,20 +574,21 @@ export function UploadArea({
     fetchTranscript(userId, targetInterviewId)
       .then((data) => {
         if (cancelled) return;
-        if (data?.text) {
-          patchTranscriptState(targetInterviewId, {
-            text: data.text,
-            updatedAt: data.createdAt || null,
-            isLoading: false,
-            error: null,
-          });
-          onTranscriptUpdate?.(targetInterviewId, data.text);
+        if (data) {
+          applyTranscriptPayload(targetInterviewId, data);
         } else if (initialTranscript) {
+          const chunk = createLocalChunk(
+            initialTranscript,
+            interviewFileUrl ? interviewFileUrl.split('/').pop() ?? undefined : undefined
+          );
           patchTranscriptState(targetInterviewId, {
             text: initialTranscript,
-            updatedAt: null,
+            updatedAt: chunk.updatedAt || null,
             isLoading: false,
             error: null,
+            chunks: [chunk],
+            failedChunks: [],
+            overallStatus: 'completed',
           });
           onTranscriptUpdate?.(targetInterviewId, initialTranscript);
         } else {
@@ -478,6 +596,10 @@ export function UploadArea({
             text: '',
             updatedAt: null,
             isLoading: false,
+            error: null,
+            chunks: [],
+            failedChunks: [],
+            overallStatus: 'empty',
           });
         }
       })
@@ -487,13 +609,22 @@ export function UploadArea({
         patchTranscriptState(targetInterviewId, {
           error: message,
           isLoading: false,
+          overallStatus: 'error',
         });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [userId, interviewId, initialTranscript, onTranscriptUpdate, patchTranscriptState]);
+  }, [
+    userId,
+    interviewId,
+    initialTranscript,
+    interviewFileUrl,
+    applyTranscriptPayload,
+    onTranscriptUpdate,
+    patchTranscriptState,
+  ]);
 
   const existingFileName =
     displayFileName ||
@@ -673,7 +804,7 @@ export function UploadArea({
 
       {/* Transcript Section */}
       <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
             <div className="flex items-center gap-2 text-gray-900 font-medium">
               <FileText className="w-5 h-5 text-blue-600" />
@@ -690,38 +821,115 @@ export function UploadArea({
               </p>
             )}
           </div>
-          <button
-            onClick={() => runTranscription()}
-            disabled={isTranscribing || !userId || !interviewId || !hasUploaded}
-            className={`px-4 py-2 rounded-lg flex items-center gap-2 border transition-colors ${
-              isTranscribing || !userId || !interviewId || !hasUploaded
-                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            {isTranscribing ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <RefreshCw className="w-4 h-4" />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => runTranscription()}
+              disabled={isTranscribing || !userId || !interviewId || !hasUploaded}
+              className={`px-4 py-2 rounded-lg flex items-center gap-2 border transition-colors ${
+                isTranscribing || !userId || !interviewId || !hasUploaded
+                  ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              {isTranscribing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              {isTranscribing ? '转写中...' : '重新转写'}
+            </button>
+            {hasFailedChunks && (
+              <button
+                onClick={() => handleRetryChunks()}
+                disabled={isTranscribing || !userId || !interviewId}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 border transition-colors ${
+                  isTranscribing || !userId || !interviewId
+                    ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                重试失败分片
+              </button>
             )}
-            {isTranscribing ? '转写中...' : '重新转写'}
-          </button>
+          </div>
         </div>
 
-        <div className="min-h-[140px] border border-dashed border-gray-200 rounded-xl bg-gray-50 p-4 overflow-y-auto">
-          {isLoadingTranscript || isTranscribing ? (
+        <div className="min-h-[140px] border border-dashed border-gray-200 rounded-xl bg-gray-50 p-4 overflow-y-auto space-y-3">
+          {isLoadingTranscript && !hasChunkData ? (
             <div className="flex items-center gap-2 text-gray-500">
               <Loader2 className="w-4 h-4 animate-spin" />
               <span>AI 正在生成文字稿...</span>
             </div>
-          ) : transcript ? (
-            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{transcript}</p>
+          ) : hasChunkData ? (
+            <div className="space-y-3">
+              {isTranscribing && (
+                <div className="flex items-center gap-2 text-blue-600 text-xs">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>正在重新转写，请稍候...</span>
+                </div>
+              )}
+              {sortedChunks.map((chunk, idx) => {
+                const meta = getChunkStatusMeta(chunk.status);
+                return (
+                  <div
+                    key={`${chunk.index}-${chunk.updatedAt ?? idx}`}
+                    className="bg-white rounded-lg border border-gray-200 p-4 space-y-2 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">
+                          分片 {chunk.index + 1}/{sortedChunks.length} · {chunk.filename}
+                        </p>
+                        {chunk.updatedAt && (
+                          <p className="text-xs text-gray-500">
+                            更新于 {new Date(chunk.updatedAt).toLocaleString()}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-xs font-medium px-2 py-0.5 rounded-full ${meta.classes}`}
+                        >
+                          {meta.label}
+                        </span>
+                        {chunk.status === 'error' && (
+                          <button
+                            onClick={() => handleRetryChunks([chunk.index])}
+                            disabled={isTranscribing}
+                            className={`text-xs px-2 py-1 rounded border transition-colors ${
+                              isTranscribing
+                                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            重试
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p
+                      className={`text-sm whitespace-pre-wrap leading-relaxed ${
+                        chunk.status === 'error' ? 'text-red-600' : 'text-gray-800'
+                      }`}
+                    >
+                      {getChunkContent(chunk)}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <p className="text-sm text-gray-500">
               暂无转写内容。上传文件后，系统会自动将音频/视频转成文本供你查看。
             </p>
           )}
         </div>
+        {transcript && (
+          <div className="border border-gray-200 rounded-xl bg-white p-4 space-y-2">
+            <p className="text-xs text-gray-500 uppercase tracking-wide">合并视图</p>
+            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{transcript}</p>
+          </div>
+        )}
         {transcriptionError && (
           <p className="text-sm text-red-600">转写出错：{transcriptionError}</p>
         )}

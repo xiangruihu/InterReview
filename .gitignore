@@ -3,3 +3,7 @@
 backend/data/*
 InterReview.zip
 backend/uploads/*
+
+# Python cache
+__pycache__/
+*.pyc

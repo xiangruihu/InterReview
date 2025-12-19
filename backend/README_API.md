@@ -16,6 +16,15 @@ uvicorn app.main:app --reload
 # 或者: python -m app
 ```
 
+## 转录任务配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `TRANSCRIBE_MAX_CONCURRENCY` | `4` | 并行处理的切片数量上限，避免超出外部 API 并发限制 |
+| `TRANSCRIBE_CHUNK_TIMEOUT` | `60` | 单个切片调用外部转录 API 的超时时间（秒） |
+| `TRANSCRIBE_MAX_RETRIES` | `2` | 每个切片失败后重试次数（总尝试次数为 1 + retries） |
+| `TRANSCRIBE_FAILURE_THRESHOLD` | `0.3` | 失败切片比例大于该阈值时将整个任务标记为失败 |
+
 ## API 端点
 
 ### 健康检查

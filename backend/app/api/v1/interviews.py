@@ -12,6 +12,7 @@ from app.services.storage_service import StorageService
 from app.services.transcription_service import TranscriptionService, TranscriptionResult
 from app.services.llm_service import LLMService
 from app.config import settings
+from app.utils.transcription_tracker import InterviewTranscriptionTracker
 import uuid
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
@@ -103,6 +104,7 @@ def _build_transcript_payload(
     result: TranscriptionResult
 ) -> Dict[str, Any]:
     timestamp = datetime.utcnow().isoformat()
+    summary = result.summary.to_dict() if result.summary else None
     payload = {
         "interviewId": interview_id,
         "text": result.merged_text,
@@ -113,6 +115,13 @@ def _build_transcript_payload(
         "chunks": [chunk.to_dict() for chunk in result.chunks],
         "failedChunks": [chunk.to_dict() for chunk in result.failed_chunks],
         "overallStatus": result.overall_status,
+        "taskSummary": summary,
+        "taskId": (summary or {}).get("taskId"),
+        "chunkStats": {
+            "total": len(result.chunks),
+            "success": len(result.chunks) - len(result.failed_chunks),
+            "failed": len(result.failed_chunks),
+        }
     }
     return payload
 
@@ -311,9 +320,22 @@ async def transcribe_interview(
 
     model = payload.model or settings.TRANSCRIPTION_MODEL
 
+    task_id = f"{interview_id}-{uuid.uuid4().hex[:8]}"
+    tracker = InterviewTranscriptionTracker(storage, user_id, interview_id, logger)
+
     try:
-        transcription_result = await transcriber.transcribe_audio(file_path, model=model)
+        transcription_result = await transcriber.transcribe_audio(
+            file_path,
+            model=model,
+            task_id=task_id,
+            progress_callback=tracker
+        )
     except Exception as e:
+        storage.update_interview(
+            user_id,
+            interview_id,
+            {"lastTranscriptionError": f"转录失败: {e}"}
+        )
         raise HTTPException(status_code=500, detail=f"转录失败: {str(e)}")
 
     transcript_payload = _build_transcript_payload(
@@ -324,7 +346,17 @@ async def transcribe_interview(
     )
 
     storage.save_transcript(user_id, interview_id, transcript_payload)
-    storage.update_interview(user_id, interview_id, {"transcriptText": transcript_payload.get("text")})
+    final_status = "已上传文件"
+    if transcription_result.summary and transcription_result.summary.status == "failed":
+        final_status = "分析失败"
+    storage.update_interview(
+        user_id,
+        interview_id,
+        {
+            "transcriptText": transcript_payload.get("text"),
+            "status": final_status
+        }
+    )
     logger.info(
         "[Transcribe] user=%s interview=%s chunks=%d status=%s",
         user_id,

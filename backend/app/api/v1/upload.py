@@ -1,12 +1,14 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 import uuid
 import shutil
 import logging
 from app.config import settings
 from app.services.storage_service import StorageService
 from app.services.transcription_service import TranscriptionService, TranscriptionResult
+from app.utils.transcription_tracker import InterviewTranscriptionTracker
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 storage = StorageService()
@@ -21,6 +23,7 @@ def _build_transcript_payload(
     result: TranscriptionResult
 ):
     timestamp = datetime.utcnow().isoformat()
+    summary = result.summary.to_dict() if result.summary else None
     return {
         "interviewId": interview_id,
         "text": result.merged_text,
@@ -31,6 +34,13 @@ def _build_transcript_payload(
         "chunks": [chunk.to_dict() for chunk in result.chunks],
         "failedChunks": [chunk.to_dict() for chunk in result.failed_chunks],
         "overallStatus": result.overall_status,
+        "taskSummary": summary,
+        "taskId": (summary or {}).get("taskId"),
+        "chunkStats": {
+            "total": len(result.chunks),
+            "success": len(result.chunks) - len(result.failed_chunks),
+            "failed": len(result.failed_chunks),
+        }
     }
 
 @router.post("/interview/{user_id}/{interview_id}")
@@ -87,6 +97,7 @@ async def upload_interview_file(
 
     # 更新面试信息 (稍后改为异步)
     transcript_payload = None
+    transcription_error: Optional[str] = None
     try:
         update_data = {
             "status": "已上传文件",
@@ -98,11 +109,16 @@ async def upload_interview_file(
         # 更新面试信息失败，但不删除已上传的文件
         logger.warning("更新面试信息失败 user=%s interview=%s err=%s", user_id, interview_id, e)
 
+    task_id = f"{interview_id}-{uuid.uuid4().hex[:8]}"
+    tracker = InterviewTranscriptionTracker(storage, user_id, interview_id, logger)
+
     # 自动执行转录
     try:
         transcription_result = await transcriber.transcribe_audio(
             file_path,
-            model=settings.TRANSCRIPTION_MODEL
+            model=settings.TRANSCRIPTION_MODEL,
+            task_id=task_id,
+            progress_callback=tracker
         )
         transcript_payload = _build_transcript_payload(
             interview_id=interview_id,
@@ -111,11 +127,14 @@ async def upload_interview_file(
             result=transcription_result
         )
         storage.save_transcript(user_id, interview_id, transcript_payload)
+        final_status = "已上传文件"
+        if transcription_result.summary and transcription_result.summary.status == "failed":
+            final_status = "分析失败"
         storage.update_interview(
             user_id,
             interview_id,
             {
-                "status": "已上传文件",
+                "status": final_status,
                 "transcriptText": transcript_payload.get("text")
             }
         )
@@ -135,6 +154,13 @@ async def upload_interview_file(
             interview_id,
             e
         )
+        response_error = f"转录失败: {e}"
+        storage.update_interview(
+            user_id,
+            interview_id,
+            {"lastTranscriptionError": response_error}
+        )
+        transcription_error = response_error
 
     response = {
         "success": True,
@@ -147,6 +173,8 @@ async def upload_interview_file(
     if transcript_payload:
         response["transcript"] = transcript_payload
         response["message"] = "文件上传并转录成功"
+    if transcription_error:
+        response["transcriptionError"] = transcription_error
 
     return response
 

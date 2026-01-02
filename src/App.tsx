@@ -1462,6 +1462,8 @@ export default function App() {
                 <ChatReport 
                   interviewData={currentInterview}
                   analysisData={currentAnalysis}
+                  allAnalysisData={analysisResults}
+                  interviews={interviews}
                   onUpdateInterview={(data) => updateInterview(selectedInterviewId, data)}
                 />
                 

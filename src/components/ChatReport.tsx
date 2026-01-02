@@ -1,8 +1,8 @@
-import { 
-  Sparkles, 
-  User, 
-  TrendingUp, 
-  TrendingDown, 
+import {
+  Sparkles,
+  User,
+  TrendingUp,
+  TrendingDown,
   MessageSquare,
   Target,
   Clock,
@@ -23,7 +23,10 @@ import {
   Check,
   Briefcase,
   Building2,
-  Calendar
+  Calendar,
+  Brain,
+  History,
+  HelpCircle,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ExportModal } from './ExportModal';
@@ -31,6 +34,8 @@ import { ExportQuestionsModal } from './ExportQuestionsModal';
 import { ExportReportModal } from './ExportReportModal';
 import { formatDuration } from '../utils/time';
 import type { AnalysisData, QAItem, SuggestionItem } from '../types/analysis';
+import { toast } from 'sonner@2.0.3';
+import { analyzeQADiagnosticInsight, type QADiagnosticInsight } from '../utils/diagnostic';
 
 interface InterviewData {
   id: string;
@@ -136,9 +141,17 @@ interface ChatReportProps {
   interviewData?: InterviewData;
   analysisData?: AnalysisData;
   onUpdateInterview: (data: Partial<InterviewData>) => void;
+  allAnalysisData?: Record<string, AnalysisData>;
+  interviews?: InterviewData[];
 }
 
-export function ChatReport({ interviewData, analysisData, onUpdateInterview }: ChatReportProps) {
+export function ChatReport({
+  interviewData,
+  analysisData,
+  onUpdateInterview,
+  allAnalysisData,
+  interviews,
+}: ChatReportProps) {
   const resolvedReportData = analysisData || defaultAnalysisData;
   const messages = useMemo<Message[]>(() => [
     {
@@ -162,6 +175,8 @@ export function ChatReport({ interviewData, analysisData, onUpdateInterview }: C
               message={message} 
               interviewData={interviewData}
               onUpdateInterview={onUpdateInterview}
+              historyAnalysis={allAnalysisData}
+              interviewList={interviews}
             />
           )}
         </div>
@@ -188,7 +203,19 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-function AssistantMessage({ message, interviewData, onUpdateInterview }: { message: Message, interviewData?: InterviewData, onUpdateInterview: (data: Partial<InterviewData>) => void }) {
+function AssistantMessage({
+  message,
+  interviewData,
+  onUpdateInterview,
+  historyAnalysis,
+  interviewList,
+}: {
+  message: Message;
+  interviewData?: InterviewData;
+  onUpdateInterview: (data: Partial<InterviewData>) => void;
+  historyAnalysis?: Record<string, AnalysisData>;
+  interviewList?: InterviewData[];
+}) {
   return (
     <div className="flex justify-start">
       <div className="flex items-start gap-3 max-w-[90%]">
@@ -198,10 +225,13 @@ function AssistantMessage({ message, interviewData, onUpdateInterview }: { messa
         <div className="flex-1">
           <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-5 py-4">
             {message.type === 'full-report' && (
-              <FullReportContent 
-                data={message.data} 
+              <FullReportContent
+                data={message.data as AnalysisData}
                 interviewData={interviewData}
                 onUpdateInterview={onUpdateInterview}
+                historyAnalysis={historyAnalysis}
+                interviewList={interviewList}
+                currentInterviewId={interviewData?.id}
               />
             )}
             {message.type === 'report-summary' && (
@@ -485,7 +515,21 @@ function SuggestionsContent({ data }: { data: any }) {
   );
 }
 
-function FullReportContent({ data, interviewData, onUpdateInterview }: { data: any, interviewData?: InterviewData, onUpdateInterview: (data: Partial<InterviewData>) => void }) {
+function FullReportContent({
+  data,
+  interviewData,
+  onUpdateInterview,
+  historyAnalysis,
+  interviewList,
+  currentInterviewId,
+}: {
+  data: AnalysisData;
+  interviewData?: InterviewData;
+  onUpdateInterview: (data: Partial<InterviewData>) => void;
+  historyAnalysis?: Record<string, AnalysisData>;
+  interviewList?: InterviewData[];
+  currentInterviewId?: string;
+}) {
   const [activeTab, setActiveTab] = useState<'overview' | 'qa' | 'analysis' | 'suggestions'>('overview');
   const [expandedQA, setExpandedQA] = useState<number | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -500,6 +544,17 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
     position: interviewData?.position || '前端开发工程师',
     date: interviewData?.date || '2024-03-15T14:00'
   });
+  const [diagnosticQA, setDiagnosticQA] = useState<number | null>(null);
+  const [loadingDiagnostic, setLoadingDiagnostic] = useState(false);
+  const [diagnosticCache, setDiagnosticCache] = useState<Record<number, QADiagnosticInsight>>({});
+
+  const mergedAnalysisMap = useMemo(() => {
+    const base: Record<string, AnalysisData> = { ...(historyAnalysis || {}) };
+    if (currentInterviewId && data) {
+      base[currentInterviewId] = data;
+    }
+    return base;
+  }, [historyAnalysis, currentInterviewId, data]);
 
   const handleSaveInfo = () => {
     // Update parent state
@@ -521,6 +576,41 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
       date: interviewData?.date || '2024-03-15T14:00'
     });
     setIsEditingInfo(false);
+  };
+
+  const handleDiagnosticRequest = async (qa: QAItem) => {
+    if (!qa?.id) return;
+
+    if (diagnosticQA === qa.id && !loadingDiagnostic) {
+      setDiagnosticQA(null);
+      return;
+    }
+
+    if (diagnosticCache[qa.id]) {
+      setDiagnosticQA(qa.id);
+      return;
+    }
+
+    try {
+      setDiagnosticQA(qa.id);
+      setLoadingDiagnostic(true);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const insight = await analyzeQADiagnosticInsight({
+        qa,
+        analysisMap: mergedAnalysisMap,
+        interviews: interviewList,
+        currentInterviewId,
+      });
+      setDiagnosticCache((prev) => ({ ...prev, [qa.id]: insight }));
+    } catch (error) {
+      console.error('[diagnostic] failed', error);
+      setDiagnosticQA(null);
+      toast.error('诊断失败', {
+        description: error instanceof Error ? error.message : '请稍后重试',
+      });
+    } finally {
+      setLoadingDiagnostic(false);
+    }
   };
 
   // Format date for display (only show date, not time)
@@ -720,10 +810,14 @@ function FullReportContent({ data, interviewData, onUpdateInterview }: { data: a
       <div className="pt-2">
         {activeTab === 'overview' && <OverviewTab data={overviewData} />}
         {activeTab === 'qa' && (
-          <QAListTab 
-            qaList={reportData.qaList} 
+          <QAListTab
+            qaList={reportData.qaList}
             expandedQA={expandedQA}
             setExpandedQA={setExpandedQA}
+            diagnosticQA={diagnosticQA}
+            diagnosticDataMap={diagnosticCache}
+            loadingDiagnostic={loadingDiagnostic}
+            onDiagnosticRequest={handleDiagnosticRequest}
           />
         )}
         {activeTab === 'analysis' && <AnalysisTab data={reportData} />}
@@ -846,10 +940,22 @@ function OverviewTab({ data }: { data: any }) {
   );
 }
 
-function QAListTab({ qaList, expandedQA, setExpandedQA }: { 
-  qaList: QAItem[], 
-  expandedQA: number | null,
-  setExpandedQA: (id: number | null) => void 
+function QAListTab({
+  qaList,
+  expandedQA,
+  setExpandedQA,
+  diagnosticQA,
+  diagnosticDataMap,
+  loadingDiagnostic,
+  onDiagnosticRequest,
+}: {
+  qaList: QAItem[];
+  expandedQA: number | null;
+  setExpandedQA: (id: number | null) => void;
+  diagnosticQA: number | null;
+  diagnosticDataMap: Record<number, QADiagnosticInsight>;
+  loadingDiagnostic: boolean;
+  onDiagnosticRequest: (qa: QAItem) => void;
 }) {
   if (!qaList || qaList.length === 0) {
     return (
@@ -866,71 +972,221 @@ function QAListTab({ qaList, expandedQA, setExpandedQA }: {
     return 'bg-red-100 text-red-700';
   };
 
+  const renderTrendMessage = (currentScore?: number, historicalScore?: number) => {
+    if (typeof currentScore !== 'number' || typeof historicalScore !== 'number') {
+      return '暂无足够的评分数据，建议多积累几场同类面试。';
+    }
+    const delta = Math.round(currentScore - historicalScore);
+    if (delta >= 0) {
+      return `本次得分 ${currentScore} 分，比历史平均（${historicalScore} 分）提升了 +${delta} 分，继续保持这个节奏 💪`;
+    }
+    return `本次得分 ${currentScore} 分，低于历史平均 ${historicalScore} 分 ${Math.abs(delta)} 分，建议优化答题结构。`;
+  };
+
   return (
     <div className="space-y-3">
       <p className="text-sm text-gray-600">
         共 {qaList.length} 个问答，点击展开查看详情
       </p>
-      {qaList.map((qa) => (
-        <div key={qa.id} className="border border-gray-200 rounded-lg overflow-hidden">
-          <button
-            onClick={() => setExpandedQA(expandedQA === qa.id ? null : qa.id)}
-            className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors flex items-center justify-between"
-          >
-            <div className="flex items-center gap-3 flex-1 text-left">
-              <span className="text-gray-500 text-sm">Q{qa.id}</span>
-              <div className="flex-1">
-                <div className="text-gray-900 text-sm">{qa.question}</div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  {qa.questioner && <span>{qa.questioner}</span>}
-                  {qa.questionTime && (
-                    <span className="ml-1">@ {qa.questionTime}</span>
-                  )}
-                </div>
-              </div>
-              {qa.category && (
-                <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
-                  {qa.category}
-                </span>
-              )}
-              {typeof qa.score === 'number' && (
-                <span className={`px-2 py-0.5 rounded text-xs ${getPriorityBadge(qa.score)}`}>
-                  {qa.score}分
-                </span>
-              )}
-            </div>
-            {expandedQA === qa.id ? (
-              <ChevronUp className="w-4 h-4 text-gray-400 ml-2" />
-            ) : (
-              <ChevronDown className="w-4 h-4 text-gray-400 ml-2" />
-            )}
-          </button>
+      {qaList.map((qa) => {
+        const diagData = diagnosticDataMap[qa.id];
+        const isActiveDiagnostic = diagnosticQA === qa.id;
+        const isLoadingThisDiagnostic = loadingDiagnostic && isActiveDiagnostic && !diagData;
+        const disableDiagnosticButton = loadingDiagnostic && diagnosticQA !== qa.id;
+        const displayCategory = diagData?.categoryLabel || qa.category || '该主题';
 
-          {expandedQA === qa.id && (
-            <div className="px-4 py-4 bg-white space-y-3">
-              <div>
-                <h6 className="text-xs text-gray-500 mb-2">候选人回答：</h6>
-                <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-700 leading-relaxed">
-                  {qa.answer}
-                </div>
-                <div className="text-xs text-gray-400 mt-1">
-                  {qa.answerer && <span>{qa.answerer}</span>}
-                  {qa.answerTime && <span className="ml-1">@ {qa.answerTime}</span>}
-                </div>
-              </div>
-
-              {qa.notes && (
-                <div>
-                  <h6 className="text-xs text-gray-500 mb-2">分析 / 复盘：</h6>
-                  <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-gray-700 leading-relaxed">
-                    {qa.notes}
+        return (
+          <div key={qa.id} className="border border-gray-200 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setExpandedQA(expandedQA === qa.id ? null : qa.id)}
+              className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors flex items-center justify-between"
+            >
+              <div className="flex items-center gap-3 flex-1 text-left">
+                <span className="text-gray-500 text-sm">Q{qa.id}</span>
+                <div className="flex-1">
+                  <div className="text-gray-900 text-sm">{qa.question}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    {qa.questioner && <span>{qa.questioner}</span>}
+                    {qa.questionTime && <span className="ml-1">@ {qa.questionTime}</span>}
                   </div>
                 </div>
+                {qa.category && (
+                  <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
+                    {qa.category}
+                  </span>
+                )}
+                {typeof qa.score === 'number' && (
+                  <span className={`px-2 py-0.5 rounded text-xs ${getPriorityBadge(qa.score)}`}>
+                    {qa.score}分
+                  </span>
+                )}
+              </div>
+              {expandedQA === qa.id ? (
+                <ChevronUp className="w-4 h-4 text-gray-400 ml-2" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-gray-400 ml-2" />
               )}
-            </div>
-          )}
-        </div>
-      ))}
+            </button>
+
+            {expandedQA === qa.id && (
+              <div className="px-4 py-4 bg-white space-y-4">
+                <div>
+                  <h6 className="text-xs text-gray-500 mb-2">候选人回答：</h6>
+                  <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-700 leading-relaxed">
+                    {qa.answer}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">
+                    {qa.answerer && <span>{qa.answerer}</span>}
+                    {qa.answerTime && <span className="ml-1">@ {qa.answerTime}</span>}
+                  </div>
+                </div>
+
+                {qa.notes && (
+                  <div>
+                    <h6 className="text-xs text-gray-500 mb-2">分析 / 复盘：</h6>
+                    <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-gray-700 leading-relaxed">
+                      {qa.notes}
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-gray-100">
+                  <button
+                    onClick={() => onDiagnosticRequest(qa)}
+                    disabled={disableDiagnosticButton}
+                    className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-50 to-blue-50 hover:from-purple-100 hover:to-blue-100 border border-purple-200 rounded-lg transition-all flex items-center justify-center gap-2 text-sm text-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Brain className="w-4 h-4" />
+                    {isLoadingThisDiagnostic
+                      ? '诊断中...'
+                      : isActiveDiagnostic
+                      ? '收起诊断'
+                      : '智能诊断分析'}
+                  </button>
+                </div>
+
+                {isActiveDiagnostic && (
+                  <div className="space-y-4 pt-2">
+                    {isLoadingThisDiagnostic && !diagData ? (
+                      <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg p-3 text-xs text-gray-600">
+                        AI 正在调取你的历史面试记录并分析，请稍候...
+                      </div>
+                    ) : diagData ? (
+                      <>
+                        <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-lg p-4">
+                          <div className="flex items-center gap-2 mb-3">
+                            <History className="w-4 h-4 text-amber-600" />
+                            <h6 className="text-sm text-amber-900">历史回答分析</h6>
+                          </div>
+                          <div className="space-y-3">
+                            {diagData.historical.similarAnswers.length > 0 ? (
+                              diagData.historical.similarAnswers.map((item, idx) => (
+                                <div
+                                  key={`${qa.id}-hist-${idx}`}
+                                  className="bg-white rounded-lg p-3 border border-amber-100"
+                                >
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex-1">
+                                      <div className="text-xs text-gray-500">
+                                        {item.interview}
+                                        {item.date ? ` · ${item.date}` : ''}
+                                      </div>
+                                      <div className="text-sm text-gray-900 mt-1">
+                                        {item.question}
+                                      </div>
+                                    </div>
+                                    {typeof item.score === 'number' && (
+                                      <span
+                                        className={`ml-2 px-2 py-0.5 rounded text-xs ${
+                                          item.score >= 60
+                                            ? 'bg-yellow-100 text-yellow-700'
+                                            : 'bg-red-100 text-red-700'
+                                        }`}
+                                      >
+                                        {item.score}分
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-gray-600 bg-gray-50 rounded p-2 mt-2 leading-relaxed">
+                                    {item.answer}
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="bg-white rounded-lg p-3 border border-dashed border-amber-200 text-xs text-amber-800">
+                                暂无类似历史记录，继续积累更多面试即可生成趋势分析。
+                              </div>
+                            )}
+
+                            <div className="bg-amber-100 border border-amber-200 rounded-lg p-3">
+                              <div className="text-xs text-amber-900 leading-relaxed">
+                                <span className="font-medium">📊 趋势分析：</span>
+                                <span className="ml-1">
+                                  {renderTrendMessage(qa.score, diagData.historical.avgHistoricalScore)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4">
+                          <div className="flex items-center gap-2 mb-3">
+                            <HelpCircle className="w-4 h-4 text-blue-600" />
+                            <h6 className="text-sm text-blue-900">可能的衍生追问</h6>
+                          </div>
+                          <p className="text-xs text-blue-700 mb-3">
+                            基于「{displayCategory}」类型，面试官可能会继续深入追问：
+                          </p>
+                          <div className="space-y-2">
+                            {diagData.derived.length > 0 ? (
+                              diagData.derived.map((item, idx) => (
+                                <div
+                                  key={`${qa.id}-derived-${idx}`}
+                                  className="bg-white rounded-lg p-3 border border-blue-100"
+                                >
+                                  <div className="flex items-start gap-2">
+                                    <div className="w-5 h-5 bg-blue-600 text-white rounded-full flex items-center justify-center flex-shrink-0 text-xs mt-0.5">
+                                      {idx + 1}
+                                    </div>
+                                    <div className="flex-1">
+                                      <div className="text-sm text-gray-900 mb-1">{item.question}</div>
+                                      <div className="text-xs text-gray-500 leading-relaxed">
+                                        <span className="text-blue-600 mr-1">→</span>
+                                        {item.reason}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="bg-white rounded-lg p-3 border border-dashed border-blue-200 text-xs text-blue-800">
+                                暂无推荐追问，建议梳理该类问题的常见延展方向。
+                              </div>
+                            )}
+                          </div>
+                          <div className="bg-blue-100 border border-blue-200 rounded-lg p-3 mt-3">
+                            <div className="text-xs text-blue-900 leading-relaxed">
+                              <span className="font-medium">💡 准备建议：</span>
+                              <span className="ml-1">
+                                针对这些衍生问题提前准备答案，能大大提升面试的流畅度和深度。建议使用 STAR
+                                法则（情境-任务-行动-结果）来组织回答。
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg p-3 text-xs text-gray-600">
+                        暂无诊断数据，请稍后重试。
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

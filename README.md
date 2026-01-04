@@ -272,6 +272,11 @@ npm run dev
 4. **实施计划**：原型 → 智能增强 → 产品化三阶段路线，明确每一步的目标。
 5. **风险与验收**：API 成本、上下文长度、可靠性、安全隐私等风险及指标（响应时间、合规率、满意度等）。
 
+## 项目演示
+以下是本次功能的演示视频：
+👉 视频地址：  
+https://www.bilibili.com/video/BV1A8m4BeEDx/
+
 ## 更多资料
 - `src/CHAT_FEATURE.md`：聊天体验与需求拆解。
 - `src/IMPROVEMENTS.md`、`src/FINAL_REVIEW.md`：UI/UX 待优化事项。

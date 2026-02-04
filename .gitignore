@@ -6,4 +6,5 @@ backend/uploads/*
 
 # Python cache
 __pycache__/
-*.pyc
+*.pycbackend/.env_rename
+backend/.env*

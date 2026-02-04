@@ -9,6 +9,8 @@ class UserProfile(BaseModel):
     createdAt: datetime
     passwordHash: str
     version: int = 1
+    googleId: Optional[str] = None
+    avatar: Optional[str] = None
 
 class UserRegisterRequest(BaseModel):
     userId: Optional[str] = None
@@ -24,3 +26,6 @@ class UserUpdate(BaseModel):
 class UserLoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+class GoogleLoginRequest(BaseModel):
+    token: str  # Google ID Token

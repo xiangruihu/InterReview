@@ -48,6 +48,10 @@ export interface LoginPayload {
   password: string;
 }
 
+export interface GoogleLoginPayload {
+  token: string;
+}
+
 export type InterviewStatus = '待上传' | '上传中' | '已上传文件' | '分析中' | '已完成' | '分析失败';
 
 export interface InterviewDataDTO {
@@ -85,6 +89,16 @@ export async function registerAccount(payload: RegisterPayload): Promise<UserPro
 
 export async function loginUser(payload: LoginPayload): Promise<UserProfileDTO> {
   const resp = await fetch(`${BACKEND_BASE}/users/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await parseResponse(resp);
+  return data?.data as UserProfileDTO;
+}
+
+export async function googleLogin(payload: GoogleLoginPayload): Promise<UserProfileDTO> {
+  const resp = await fetch(`${BACKEND_BASE}/users/google-login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

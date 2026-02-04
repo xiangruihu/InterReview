@@ -8,3 +8,4 @@ backend/uploads/*
 __pycache__/
 *.pycbackend/.env_rename
 backend/.env*
+client.json

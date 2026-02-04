@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { LogIn, Mail, Lock, Eye, EyeOff, User, UserPlus } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
-import { loginUser, registerAccount, type UserProfileDTO } from '../utils/backend';
+import { loginUser, registerAccount, googleLogin, type UserProfileDTO } from '../utils/backend';
 
 interface LoginPageProps {
   onLogin: (profile: { userId: string; username: string; email: string; createdAt?: string }) => void;
@@ -16,6 +16,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   // Reset form when switching modes
@@ -130,6 +131,46 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       setIsLoading(false);
     }
   };
+
+  // Google login callback
+  const handleGoogleLogin = async (response: any) => {
+    setIsGoogleLoading(true);
+    setFormError(null);
+
+    try {
+      const credential = response.credential; // Google ID Token
+      const profile = await googleLogin({ token: credential });
+      onLogin(profile);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '请稍后重试';
+      toast.error('Google 登录失败', { description: message });
+      setFormError(message);
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
+
+  // Initialize Google Sign-In
+  useEffect(() => {
+    if (typeof window.google !== 'undefined') {
+      window.google.accounts.id.initialize({
+        client_id: '893987418304-9778qnv8vhbt8tfokule6so1hm82uv66.apps.googleusercontent.com',
+        callback: handleGoogleLogin,
+        auto_select: false,
+      });
+
+      window.google.accounts.id.renderButton(
+        document.getElementById('google-signin-button'),
+        {
+          theme: 'outline',
+          size: 'large',
+          text: 'signin_with',
+          shape: 'rectangular',
+          width: '100%',
+        }
+      );
+    }
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
@@ -290,7 +331,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || isGoogleLoading}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/20 hover:shadow-xl hover:shadow-blue-600/30"
             >
               {isLoading ? (
@@ -332,11 +373,19 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               <button
                 type="button"
                 onClick={handleQuickLogin}
-                disabled={isLoading}
+                disabled={isLoading || isGoogleLoading}
                 className="w-full py-3 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-xl border border-gray-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 快速体验（演示账号）
               </button>
+
+              {/* Google Sign-In Button */}
+              <div className="mt-3">
+                <div
+                  id="google-signin-button"
+                  className="w-full flex justify-center"
+                />
+              </div>
             </>
           )}
 

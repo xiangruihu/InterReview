@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Body
 from typing import Optional, List, Dict, Any
-from app.models.user import UserProfile, UserRegisterRequest, UserLoginRequest
+from app.models.user import UserProfile, UserRegisterRequest, UserLoginRequest, GoogleLoginRequest
 from app.services.storage_service import StorageService
+from app.services.google_auth import verify_google_token, GoogleAuthError
 import uuid
 from datetime import datetime
 from passlib.context import CryptContext
@@ -119,6 +120,74 @@ async def login_user(credentials: UserLoginRequest):
         "success": True,
         "data": sanitize_user_payload(user_record)
     }
+
+@router.post("/google-login", response_model=dict)
+async def google_login(request: GoogleLoginRequest):
+    """
+    Google 登录
+    1. 验证 Google ID Token
+    2. 提取用户信息 (email, name, picture, sub)
+    3. 查找或创建用户
+    4. 返回用户档案
+    """
+    try:
+        # Verify Google token
+        user_info = await verify_google_token(request.token)
+
+        normalized_email = user_info['email'].strip().lower()
+        google_id = user_info['sub']
+        name = user_info.get('name', '').strip() or '未命名用户'
+        picture = user_info.get('picture', '')
+
+        # Check if user exists
+        user_record = storage.find_user_by_email(normalized_email)
+
+        if user_record:
+            # Update existing user with Google ID if not set
+            user_id = user_record.get('userId')
+            if not user_record.get('googleId'):
+                user_record['googleId'] = google_id
+            if picture and not user_record.get('avatar'):
+                user_record['avatar'] = picture
+            storage.save_user(user_id, user_record)
+
+            return {
+                "success": True,
+                "data": sanitize_user_payload(user_record)
+            }
+        else:
+            # Create new user
+            user_id = str(uuid.uuid4())
+            created_at = datetime.utcnow()
+
+            # Create user without password (Google login only)
+            user = UserProfile(
+                userId=user_id,
+                username=name,
+                email=normalized_email,
+                createdAt=created_at,
+                passwordHash="",  # No password for Google-only accounts
+                googleId=google_id,
+                avatar=picture
+            )
+
+            user_payload = user.model_dump(mode="json")
+
+            if storage.save_user(user_id, user_payload):
+                return {
+                    "success": True,
+                    "data": sanitize_user_payload(user_payload)
+                }
+            else:
+                raise HTTPException(status_code=500, detail="保存用户数据失败")
+
+    except GoogleAuthError as e:
+        raise HTTPException(status_code=401, detail=f"Google 登录验证失败: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Google 登录失败: {str(e)}")
+
 
 @router.get("/{user_id}", response_model=dict)
 async def get_user(user_id: str):

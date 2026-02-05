@@ -13,13 +13,14 @@ from app.services.transcription_service import TranscriptionService, Transcripti
 from app.services.llm_service import LLMService
 from app.config import settings
 from app.utils.transcription_tracker import InterviewTranscriptionTracker
+from app.core.transcription import get_transcriber
 import uuid
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 storage = StorageService()
-transcriber = TranscriptionService(settings.SILICONFLOW_API_KEY)
-llm_service = LLMService(settings.DASHSCOPE_API_KEY, default_model=settings.DEFAULT_LLM_MODEL)
 logger = logging.getLogger(__name__)
+
+llm_service = LLMService(settings.DASHSCOPE_API_KEY, default_model=settings.DEFAULT_LLM_MODEL)
 
 class TranscriptionRequest(BaseModel):
     model: Optional[str] = None
@@ -324,6 +325,8 @@ async def transcribe_interview(
     tracker = InterviewTranscriptionTracker(storage, user_id, interview_id, logger)
 
     try:
+        transcriber = get_transcriber()
+        logger.info(f"使用转录服务: {type(transcriber).__name__}")
         transcription_result = await transcriber.transcribe_audio(
             file_path,
             model=model,
@@ -442,6 +445,8 @@ async def retry_failed_chunks(
         raise HTTPException(status_code=404, detail="上传文件不存在，请重新上传")
 
     try:
+        transcriber = get_transcriber()
+        logger.info(f"使用转录服务 (重试): {type(transcriber).__name__}")
         subset_results = await transcriber.transcribe_chunk_subset(file_path, target_indices, model=model)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"分片重试失败: {exc}")

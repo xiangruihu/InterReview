@@ -2,7 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import os
+import logging
 from app.api.v1 import users, interviews, upload
+from app.core.transcription import initialize_transcription_service
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="InterReview API",
@@ -23,6 +27,21 @@ app.add_middleware(
 Path("data").mkdir(exist_ok=True)
 Path("uploads").mkdir(exist_ok=True)
 
+# 应用启动事件
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化服务"""
+    logger.info("=" * 60)
+    logger.info("InterReview 应用启动中...")
+    logger.info("=" * 60)
+
+    # 初始化转录服务
+    initialize_transcription_service()
+
+    logger.info("=" * 60)
+    logger.info("InterReview 应用启动完成")
+    logger.info("=" * 60)
+
 # 注册路由
 app.include_router(users.router)
 app.include_router(interviews.router)
@@ -36,6 +55,24 @@ async def healthz():
         "version": "0.2.0",
         "message": "InterReview Backend is running"
     }
+
+@app.get("/healthz/transcription")
+async def transcription_health():
+    """检查转录服务状态"""
+    from app.core.transcription import get_transcriber
+    try:
+        transcriber = get_transcriber()
+        return {
+            "status": "healthy",
+            "service_type": type(transcriber).__name__,
+            "initialized": True
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "initialized": False
+        }
 
 @app.get("/")
 async def root():

@@ -7,12 +7,12 @@ import shutil
 import logging
 from app.config import settings
 from app.services.storage_service import StorageService
-from app.services.transcription_service import TranscriptionService, TranscriptionResult
+from app.services.transcription_service import TranscriptionResult
+from app.core.transcription import get_transcriber
 from app.utils.transcription_tracker import InterviewTranscriptionTracker
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 storage = StorageService()
-transcriber = TranscriptionService(settings.SILICONFLOW_API_KEY)
 logger = logging.getLogger(__name__)
 
 
@@ -114,6 +114,7 @@ async def upload_interview_file(
 
     # 自动执行转录
     try:
+        transcriber = get_transcriber()
         transcription_result = await transcriber.transcribe_audio(
             file_path,
             model=settings.TRANSCRIPTION_MODEL,

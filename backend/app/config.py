@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     DEFAULT_LLM_MODEL: str = "qwen3-max"
     TRANSCRIPTION_MODEL: str = "FunAudioLLM/SenseVoiceSmall"
 
+    # Transcription Settings
+    TRANSCRIPTION_METHOD: str = "whisper"  # "whisper" for local, "api" for online
+    WHISPER_MODEL_SIZE: str = "base"  # tiny, base, small, medium, large
+
     # Celery
     REDIS_URL: str = "redis://localhost:6379"
 

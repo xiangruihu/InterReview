@@ -133,8 +133,10 @@ pip install -r requirements.txt
 | 变量 | 用途 | 备注 |
 | --- | --- | --- |
 | `VITE_API_BASE` | 前端调用后端的基础地址 | 默认为 `/api`（同域反代），本地开发可在 `.env` 中改成 `http://127.0.0.1:8000`。 |
-| `DASHSCOPE_API_KEY` | DashScope LLM 的唯一 Key | Vite 已配置暴露到前端，同时后端 `LLMService` / `llm.py` 也读取该值。 |
+| `DASHSCOPE_API_KEY` | DashScope LLM 的唯一 Key | 仅供后端 `LLMService` / `llm.py` 使用，不应暴露到浏览器。 |
 | `SILICONFLOW_API_KEY` | SenseVoice 转写 Key | 被后端 `TranscriptionService`、`transcribe.py` 使用。 |
+| `VITE_GOOGLE_CLIENT_ID` | 前端 Google 登录 Client ID | `LoginPage` 使用它初始化 Google Sign-In 按钮。 |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 后端 Google OAuth 校验配置 | 被 `backend/app/services/google_auth.py` 使用。 |
 | `MOCK_TRANSCRIPTION` | 转写 Mock 开关 | 任意 truthy 值代表强制走本地示例，便于开发。 |
 | `UPLOAD_DIR` | 可选，默认 `./uploads` | 通过 `backend/app/config.py` 覆盖。 |
 | `REDIS_URL` | Celery/任务队列配置 | 当前未使用，预留。 |
@@ -248,7 +250,7 @@ npm run dev
 6. **Review 流程**：至少 1 名同伴 Review，重点关注 API 兼容性、密钥管理、性能（文件上传/LLM 调用）等风险点。
 
 ## 测试与排错
-- **LLM Key 缺失**：前端 console 会提示 “未检测到 DASHSCOPE_API_KEY，使用本地 Mock”，可放心用于 UI 联调。
+- **LLM Key 缺失**：后端分析或聊天接口会提示未配置 `DASHSCOPE_API_KEY`；前端不再直接读取该 Key。
 - **转写失败**：`TranscriptionService` 会 fallback 到 mock，查看后端日志中 `[Upload][Transcribe]` 相关输出定位原因。
 - **文件过大/格式错误**：`UploadArea` 和 `/upload` 均会校验（200 MB、扩展名/MIME），错误信息会通过 `toast` 返回。
 - **数据未持久化**：确认 `backend/data/<userId>/` 是否有写权限；Docker/部署环境需挂载持久卷或切换到 Supabase。

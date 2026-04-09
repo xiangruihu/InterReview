@@ -36,10 +36,10 @@ pip install fastapi uvicorn python-dotenv openai python-multipart pydantic celer
 
 ```bash
 # 来自阿里云 DashScope
-DASHSCOPE_API_KEY=sk-edcb432be46347a8881cdc1d76f16363
+DASHSCOPE_API_KEY=your_dashscope_api_key
 
 # 来自 SiliconFlow
-SILICONFLOW_API_KEY=sk-sfifiqelobuqndcehwoaqwdiwvpakfbducqlmvoepwczoejp
+SILICONFLOW_API_KEY=your_siliconflow_api_key
 
 # Redis (稍后使用)
 REDIS_URL=redis://localhost:6379

@@ -5,7 +5,7 @@
 
   export default defineConfig({
     plugins: [react()],
-    envPrefix: ['VITE_', 'DASHSCOPE_', 'SILICONFLOW_'],
+    envPrefix: ['VITE_'],
     resolve: {
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
       alias: {

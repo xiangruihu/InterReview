@@ -3,11 +3,14 @@ import { LogIn, Mail, Lock, Eye, EyeOff, User, UserPlus } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { loginUser, registerAccount, googleLogin, type UserProfileDTO } from '../utils/backend';
 
+const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim();
+
 interface LoginPageProps {
   onLogin: (profile: { userId: string; username: string; email: string; createdAt?: string }) => void;
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
+  const isGoogleLoginEnabled = Boolean(GOOGLE_CLIENT_ID);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -133,12 +136,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   };
 
   // Google login callback
-  const handleGoogleLogin = async (response: any) => {
+  const handleGoogleLogin = async (response: GoogleCredentialResponse) => {
     setIsGoogleLoading(true);
     setFormError(null);
 
     try {
       const credential = response.credential; // Google ID Token
+      if (!credential) {
+        throw new Error('缺少 Google 登录凭证');
+      }
       const profile = await googleLogin({ token: credential });
       onLogin(profile);
     } catch (error) {
@@ -152,24 +158,41 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   // Initialize Google Sign-In
   useEffect(() => {
-    if (typeof window.google !== 'undefined') {
+    if (!isGoogleLoginEnabled) return;
+
+    let cancelled = false;
+
+    const renderGoogleButton = () => {
+      if (cancelled) return;
+      if (typeof window.google === 'undefined') {
+        window.setTimeout(renderGoogleButton, 300);
+        return;
+      }
+
+      const container = document.getElementById('google-signin-button');
+      if (!container) return;
+
+      container.innerHTML = '';
       window.google.accounts.id.initialize({
-        client_id: '893987418304-9778qnv8vhbt8tfokule6so1hm82uv66.apps.googleusercontent.com',
+        client_id: GOOGLE_CLIENT_ID as string,
         callback: handleGoogleLogin,
         auto_select: false,
       });
 
-      window.google.accounts.id.renderButton(
-        document.getElementById('google-signin-button'),
-        {
-          theme: 'outline',
-          size: 'large',
-          text: 'signin_with',
-          shape: 'rectangular',
-          width: '100%',
-        }
-      );
-    }
+      window.google.accounts.id.renderButton(container, {
+        theme: 'outline',
+        size: 'large',
+        text: 'signin_with',
+        shape: 'rectangular',
+        width: '100%',
+      });
+    };
+
+    renderGoogleButton();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -380,12 +403,18 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               </button>
 
               {/* Google Sign-In Button */}
-              <div className="mt-3">
-                <div
-                  id="google-signin-button"
-                  className="w-full flex justify-center"
-                />
-              </div>
+              {isGoogleLoginEnabled ? (
+                <div className="mt-3">
+                  <div
+                    id="google-signin-button"
+                    className="w-full flex justify-center"
+                  />
+                </div>
+              ) : (
+                <p className="mt-3 text-center text-xs text-gray-500">
+                  未配置 `VITE_GOOGLE_CLIENT_ID`，已隐藏 Google 登录。
+                </p>
+              )}
             </>
           )}
 

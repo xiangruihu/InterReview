@@ -1,11 +1,34 @@
-# *.mp3
-*.env
-backend/data/*
-InterReview.zip
-backend/uploads/*
+# Environment files
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/.env_rename
+src/utils/.env
 
-# Python cache
+# Node / Vite
+node_modules/
+build/
+.vite/
+
+# Python cache / virtualenv
 __pycache__/
-*.pycbackend/.env_rename
-backend/.env*
+*.py[cod]
+.pytest_cache/
+.venv/
+backend/.venv/
+
+# Runtime data
+backend/data/*
+backend/uploads/*
+*.log
+backend.log
+
+# OS files
+.DS_Store
+
+# Local artifacts
+InterReview.zip
 client.json

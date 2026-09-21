@@ -1,3 +1,5 @@
+
+
 # InterReview
 
 > 面向候选人的 AI 面试复盘工作台：把录音/文字稿上传到云端，自动完成转写、分析、总结、追问和导出，帮助团队快速定位问题、沉淀知识。
@@ -69,7 +71,7 @@ https://github.com/xiangruihu/InterReview
 
 ## 功能亮点
 - **面试资产管理**：侧边栏集中管理多场面试，支持搜索、重命名、删除、状态跟踪（待上传/分析中/已完成等）。
-- **多格式上传与自动转写**：可上传 MP3/WAV/M4A/MP4/TXT（≤200 MB），后端自动落盘至 `backend/uploads/`，并调用 SiliconFlow API（或 mock）生成文字稿。
+- **多格式上传与自动转写**：可上传 MP3/WAV/M4A/MP4/TXT（≤200 MB），后端自动落盘至 `backend/uploads/`，并调用 SiliconFlow API（或 mock）生成文字稿。
 - **AI 分析报告**：`AnalysisReport` 组件提供问答得分、优劣势、通过概率、改进建议等结构化视图，支持继续优化回答/导出等操作。
 - **上下文聊天助手**：`ChatArea`、`MessageList` 结合 DashScope LLM，为每场面试提供带上下文的追问与改写建议。
 - **持久化策略**：前端 localStorage 做快速缓存，后端 `StorageService` 以 JSON 存盘，可无缝切换到 Supabase（schema 见 `backend/supabase_schema.sql`）。
@@ -250,7 +252,7 @@ npm run dev
 ## 测试与排错
 - **LLM Key 缺失**：前端 console 会提示 “未检测到 DASHSCOPE_API_KEY，使用本地 Mock”，可放心用于 UI 联调。
 - **转写失败**：`TranscriptionService` 会 fallback 到 mock，查看后端日志中 `[Upload][Transcribe]` 相关输出定位原因。
-- **文件过大/格式错误**：`UploadArea` 和 `/upload` 均会校验（200 MB、扩展名/MIME），错误信息会通过 `toast` 返回。
+- **文件过大/格式错误**：`UploadArea` 和 `/upload` 均会校验（200 MB、扩展名/MIME），错误信息会通过 `toast` 返回。
 - **数据未持久化**：确认 `backend/data/<userId>/` 是否有写权限；Docker/部署环境需挂载持久卷或切换到 Supabase。
 - **Supabase 验证**：运行 `node backend/test_supabase.mjs`，若报错请检查 `.env`、网络和 RLS 策略。
 
@@ -278,7 +280,7 @@ npm run dev
 
 [![ExcelMind 演示视频](https://img.shields.io/badge/📺_点击观看-Bilibili视频-00A1D6?style=for-the-badge&logo=bilibili)](https://www.bilibili.com/video/BV1A8m4BeEDx/)
 
-> 视频展示了 ExcelMind 的核心功能：自然语言查询、智能联表、知识库检索等
+> 视频展示了 InterReview 的核心功能：上传转写、智能分析、AI 追问和导出等
 
 ## 更多资料
 - `src/CHAT_FEATURE.md`：聊天体验与需求拆解。
